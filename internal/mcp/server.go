@@ -1,0 +1,363 @@
+package mcp
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+
+	"github.com/a3tai/mcp-pdf-reader/internal/config"
+	"github.com/a3tai/mcp-pdf-reader/internal/pdf"
+)
+
+// Server represents the MCP server instance
+type Server struct {
+	config     *config.Config
+	pdfService *pdf.Service
+	mcpServer  *server.MCPServer
+}
+
+// NewServer creates a new MCP server instance
+func NewServer(cfg *config.Config, pdfService *pdf.Service) (*Server, error) {
+	if pdfService == nil {
+		return nil, fmt.Errorf("pdfService cannot be nil")
+	}
+
+	// Create MCP server
+	mcpServer := server.NewMCPServer(
+		cfg.ServerName,
+		cfg.Version,
+		server.WithToolCapabilities(false), // We don't support dynamic tool capabilities
+	)
+
+	s := &Server{
+		config:     cfg,
+		pdfService: pdfService,
+		mcpServer:  mcpServer,
+	}
+
+	// Register tools
+	if err := s.registerTools(); err != nil {
+		return nil, fmt.Errorf("failed to register tools: %w", err)
+	}
+
+	return s, nil
+}
+
+// registerTools registers all available MCP tools
+func (s *Server) registerTools() error {
+	// Register PDF read file tool
+	pdfReadFileTool := mcp.NewTool(
+		"pdf_read_file",
+		mcp.WithDescription("Read and extract text content from a PDF file"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+	)
+	s.mcpServer.AddTool(pdfReadFileTool, s.handlePDFReadFile)
+
+	// Register PDF assets file tool
+	pdfAssetsFileTool := mcp.NewTool(
+		"pdf_assets_file",
+		mcp.WithDescription("Extract visual assets like images from a PDF file"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+	)
+	s.mcpServer.AddTool(pdfAssetsFileTool, s.handlePDFAssetsFile)
+
+	// Register PDF validate file tool
+	pdfValidateFileTool := mcp.NewTool(
+		"pdf_validate_file",
+		mcp.WithDescription("Validate if a file is a readable PDF"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+	)
+	s.mcpServer.AddTool(pdfValidateFileTool, s.handlePDFValidateFile)
+
+	// Register PDF stats file tool
+	pdfStatsFileTool := mcp.NewTool(
+		"pdf_stats_file",
+		mcp.WithDescription("Get detailed statistics about a PDF file"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+	)
+	s.mcpServer.AddTool(pdfStatsFileTool, s.handlePDFStatsFile)
+
+	// Register PDF search directory tool
+	pdfSearchDirectoryTool := mcp.NewTool(
+		"pdf_search_directory",
+		mcp.WithDescription("Search for PDF files in a directory with optional fuzzy search"),
+		mcp.WithString("directory",
+			mcp.Description("Directory path to search (uses default if empty)"),
+		),
+		mcp.WithString("query",
+			mcp.Description("Optional search query for fuzzy matching"),
+		),
+	)
+	s.mcpServer.AddTool(pdfSearchDirectoryTool, s.handlePDFSearchDirectory)
+
+	// Register PDF stats directory tool
+	pdfStatsDirectoryTool := mcp.NewTool(
+		"pdf_stats_directory",
+		mcp.WithDescription("Get statistics about PDF files in a directory"),
+		mcp.WithString("directory",
+			mcp.Description("Directory path to analyze (uses default if empty)"),
+		),
+	)
+	s.mcpServer.AddTool(pdfStatsDirectoryTool, s.handlePDFStatsDirectory)
+
+	return nil
+}
+
+// Handler functions
+func (s *Server) handlePDFReadFile(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	req := pdf.PDFReadFileRequest{Path: path}
+	result, err := s.pdfService.PDFReadFile(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	responseText := fmt.Sprintf("Successfully read PDF: %s\n", result.Path)
+	responseText += fmt.Sprintf("Pages: %d\n", result.Pages)
+	responseText += fmt.Sprintf("Size: %d bytes\n\n", result.Size)
+	responseText += "Content:\n"
+	responseText += result.Content
+
+	return mcp.NewToolResultText(responseText), nil
+}
+
+func (s *Server) handlePDFAssetsFile(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	req := pdf.PDFAssetsFileRequest{Path: path}
+	result, err := s.pdfService.PDFAssetsFile(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	responseText := s.formatPDFAssetsFileResult(result)
+	return mcp.NewToolResultText(responseText), nil
+}
+
+func (s *Server) handlePDFValidateFile(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	req := pdf.PDFValidateFileRequest{Path: path}
+	result, err := s.pdfService.PDFValidateFile(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	var responseText string
+	if result.Valid {
+		responseText = fmt.Sprintf("PDF file %s is valid and readable", result.Path)
+	} else {
+		responseText = fmt.Sprintf("PDF validation failed for %s: %s", result.Path, result.Message)
+	}
+
+	return mcp.NewToolResultText(responseText), nil
+}
+
+func (s *Server) handlePDFStatsFile(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	req := pdf.PDFStatsFileRequest{Path: path}
+	result, err := s.pdfService.PDFStatsFile(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	responseText := s.formatPDFStatsFileResult(result)
+	return mcp.NewToolResultText(responseText), nil
+}
+
+func (s *Server) handlePDFSearchDirectory(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+
+	directory := s.config.PDFDirectory // default
+	if dir, ok := args["directory"].(string); ok && dir != "" {
+		directory = dir
+	}
+
+	query := ""
+	if q, ok := args["query"].(string); ok {
+		query = q
+	}
+
+	req := pdf.PDFSearchDirectoryRequest{
+		Directory: directory,
+		Query:     query,
+	}
+
+	result, err := s.pdfService.PDFSearchDirectory(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	var responseText string
+	if result.TotalCount == 0 {
+		responseText = fmt.Sprintf("No PDF files found in directory: %s", result.Directory)
+		if result.SearchQuery != "" {
+			responseText += fmt.Sprintf(" (searched for: %s)", result.SearchQuery)
+		}
+	} else {
+		responseText = s.formatPDFSearchDirectoryResult(result)
+	}
+
+	return mcp.NewToolResultText(responseText), nil
+}
+
+func (s *Server) handlePDFStatsDirectory(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+
+	directory := s.config.PDFDirectory // default
+	if dir, ok := args["directory"].(string); ok && dir != "" {
+		directory = dir
+	}
+
+	req := pdf.PDFStatsDirectoryRequest{Directory: directory}
+	result, err := s.pdfService.PDFStatsDirectory(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	responseText := s.formatPDFStatsDirectoryResult(result)
+	return mcp.NewToolResultText(responseText), nil
+}
+
+// Formatting methods
+func (s *Server) formatPDFSearchDirectoryResult(result *pdf.PDFSearchDirectoryResult) string {
+	text := fmt.Sprintf("Found %d PDF file(s) in directory: %s\n", result.TotalCount, result.Directory)
+	if result.SearchQuery != "" {
+		text += fmt.Sprintf("Search query: %s\n", result.SearchQuery)
+	}
+	text += "\nFiles:\n"
+
+	for i, file := range result.Files {
+		text += fmt.Sprintf("%d. %s\n", i+1, file.Name)
+		text += fmt.Sprintf("   Path: %s\n", file.Path)
+		text += fmt.Sprintf("   Size: %d bytes\n", file.Size)
+		text += fmt.Sprintf("   Modified: %s\n", file.ModifiedTime)
+		if i < len(result.Files)-1 {
+			text += "\n"
+		}
+	}
+
+	return text
+}
+
+func (s *Server) formatPDFStatsDirectoryResult(result *pdf.PDFStatsDirectoryResult) string {
+	text := fmt.Sprintf("PDF Directory Statistics\n")
+	text += fmt.Sprintf("Directory: %s\n", result.Directory)
+	text += fmt.Sprintf("Total PDF files: %d\n", result.TotalFiles)
+	text += fmt.Sprintf("Total size: %d bytes\n", result.TotalSize)
+
+	if result.TotalFiles > 0 {
+		text += fmt.Sprintf("Average file size: %d bytes\n", result.AverageFileSize)
+		if result.LargestFileName != "" {
+			text += fmt.Sprintf("Largest file: %s (%d bytes)\n", result.LargestFileName, result.LargestFileSize)
+		}
+		if result.SmallestFileName != "" {
+			text += fmt.Sprintf("Smallest file: %s (%d bytes)\n", result.SmallestFileName, result.SmallestFileSize)
+		}
+	}
+
+	return text
+}
+
+func (s *Server) formatPDFStatsFileResult(result *pdf.PDFStatsFileResult) string {
+	text := fmt.Sprintf("PDF File Statistics\n")
+	text += fmt.Sprintf("File: %s\n", result.Path)
+	text += fmt.Sprintf("Size: %d bytes\n", result.Size)
+	text += fmt.Sprintf("Pages: %d\n", result.Pages)
+	text += fmt.Sprintf("Modified: %s\n", result.ModifiedDate)
+
+	if result.Title != "" {
+		text += fmt.Sprintf("Title: %s\n", result.Title)
+	}
+	if result.Author != "" {
+		text += fmt.Sprintf("Author: %s\n", result.Author)
+	}
+	if result.Subject != "" {
+		text += fmt.Sprintf("Subject: %s\n", result.Subject)
+	}
+	if result.Producer != "" {
+		text += fmt.Sprintf("Producer: %s\n", result.Producer)
+	}
+	if result.CreatedDate != "" {
+		text += fmt.Sprintf("Created: %s\n", result.CreatedDate)
+	}
+
+	return text
+}
+
+func (s *Server) formatPDFAssetsFileResult(result *pdf.PDFAssetsFileResult) string {
+	text := fmt.Sprintf("PDF Assets for: %s\n", result.Path)
+	text += fmt.Sprintf("Total images found: %d\n", result.TotalCount)
+
+	if result.TotalCount > 0 {
+		text += "\nImages:\n"
+		for i, img := range result.Images {
+			text += fmt.Sprintf("%d. Page %d: %dx%d pixels, Format: %s",
+				i+1, img.PageNumber, img.Width, img.Height, img.Format)
+			if img.Size > 0 {
+				text += fmt.Sprintf(", Size: %d bytes", img.Size)
+			}
+			text += "\n"
+		}
+	}
+
+	return text
+}
+
+// Run starts the MCP server in the configured mode
+func (s *Server) Run(ctx context.Context) error {
+	if s.config.IsServerMode() {
+		return s.runServerMode(ctx)
+	} else {
+		return s.runStdioMode(ctx)
+	}
+}
+
+// runStdioMode runs the server in stdio mode
+func (s *Server) runStdioMode(ctx context.Context) error {
+	if s.config.IsDebug() {
+		log.Printf("Starting PDF MCP server in stdio mode")
+		log.Printf("PDF directory: %s", s.config.PDFDirectory)
+	}
+
+	// Use the mark3labs/mcp-go server.ServeStdio function
+	return server.ServeStdio(s.mcpServer)
+}
+
+// runServerMode runs the server in HTTP server mode
+func (s *Server) runServerMode(ctx context.Context) error {
+	// For now, we'll just use stdio mode since the mark3labs library
+	// handles the transport differently
+	log.Printf("Server mode not yet implemented with mark3labs/mcp-go")
+	log.Printf("Falling back to stdio mode")
+	return s.runStdioMode(ctx)
+}

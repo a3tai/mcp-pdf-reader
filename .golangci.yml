@@ -1,0 +1,190 @@
+# .golangci.yml - Configuration for golangci-lint
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+  allow-parallel-runners: true
+
+linters-settings:
+  govet:
+    enable:
+      - atomicalign
+      - deepequalerrors
+      - fieldalignment
+      - findcall
+      - nilness
+      - reflectvaluecompare
+      - sortslice
+      - timeformat
+      - unusedwrite
+    disable:
+      - shadow # Too noisy
+
+  gocyclo:
+    min-complexity: 15
+
+  dupl:
+    threshold: 100
+
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+
+  misspell:
+    locale: US
+
+  lll:
+    line-length: 120
+
+  goimports:
+    local-prefixes: github.com/a3tai/mcp-pdf-reader
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+    disabled-checks:
+      - unnamedResult
+      - hugeParam
+
+  revive:
+    severity: warning
+    rules:
+      - name: exported
+        arguments:
+          - "checkPrivateReceivers"
+          - "sayRepetitiveInsteadOfStutters"
+
+  staticcheck:
+    checks: [ "all" ]
+
+  unused:
+    check-exported: false
+
+  gosec:
+    excludes:
+      - G204 # Subprocess launched with variable - we need this for MCP
+      - G304 # File path provided as taint input - we validate paths
+
+  errcheck:
+    check-type-assertions: true
+    check-blank: false
+
+linters:
+  enable:
+    # Code quality
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - gosimple
+    - structcheck
+    - varcheck
+    - deadcode
+    - typecheck
+
+    # Style and formatting
+    - gofmt
+    - goimports
+    - misspell
+    - lll
+    - whitespace
+
+    # Complexity and maintainability
+    - gocyclo
+    - dupl
+    - goconst
+
+    # Security
+    - gosec
+
+    # Performance
+    - prealloc
+
+    # Best practices
+    - gocritic
+    - revive
+    - gci
+    - gofumpt
+
+    # Error handling
+    - errorlint
+    - wrapcheck
+
+  disable:
+    # Too strict or noisy for this project
+    - funlen
+    - gocognit
+    - nestif
+    - cyclop
+    - forbidigo
+    - exhaustive
+    - exhaustivestruct
+    - forcetypeassert
+    - godot
+    - godox
+    - gomnd
+    - ireturn
+    - nlreturn
+    - nolintlint
+    - paralleltest
+    - tagliatelle
+    - testpackage
+    - wsl
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - dupl
+        - gosec
+        - lll
+        - wrapcheck
+
+    # Exclude some staticcheck messages
+    - linters:
+        - staticcheck
+      text: "SA9003:"
+
+    # Exclude lll issues for long lines with go:generate
+    - linters:
+        - lll
+      source: "^//go:generate "
+
+    # Ignore complexity in main function
+    - path: cmd/
+      text: "main function"
+      linters:
+        - gocyclo
+
+    # Allow fmt.Printf in main for version output
+    - path: cmd/mcp-pdf-reader/main.go
+      text: "use of `fmt.Printf`"
+      linters:
+        - forbidigo
+
+  exclude-use-default: false
+  exclude:
+    # errcheck: Almost all programs ignore errors on these functions
+    - Error return value of .((os\.)?std(out|err)\..*|.*Close|.*Flush|os\.Remove(All)?|.*printf?|os\.(Un)?Setenv). is not checked
+    # gosec: Too many false-positives on 'unsafe' usage
+    - G103
+    # gosec: Too many false-positives for parametrized shell calls
+    - G204
+    # gosec: Duplicated errcheck checks
+    - G104
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+  uniq-by-line: true
+  sort-results: true

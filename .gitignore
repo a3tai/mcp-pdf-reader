@@ -1,0 +1,79 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+mcp-pdf-reader
+
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+*.log
+logs/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build directories
+build/
+dist/
+
+# CI/CD artifacts
+.github/artifacts/
+release-packages/
+*.tar.gz
+*.zip
+*.sha256
+
+# Coverage files
+coverage/
+coverage.out
+coverage.html
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Cross-platform binaries
+mcp-pdf-reader-*
+
+# Backup files
+*.bak
+*.backup

@@ -29,7 +29,7 @@ func TestSearch_SearchDirectory(t *testing.T) {
 
 	for filename, content := range testFiles {
 		filePath := filepath.Join(tempDir, filename)
-		if err := os.WriteFile(filePath, content, 0644); err != nil {
+		if err := os.WriteFile(filePath, content, 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}
@@ -174,7 +174,7 @@ func TestSearch_FindPDFsInDirectory(t *testing.T) {
 	for _, filename := range testFiles {
 		filePath := filepath.Join(tempDir, filename)
 		content := make([]byte, 1024)
-		if err := os.WriteFile(filePath, content, 0644); err != nil {
+		if err := os.WriteFile(filePath, content, 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}
@@ -214,7 +214,7 @@ func TestSearch_CountPDFsInDirectory(t *testing.T) {
 	for _, filename := range append(pdfFiles, nonPdfFiles...) {
 		filePath := filepath.Join(tempDir, filename)
 		content := make([]byte, 1024)
-		if err := os.WriteFile(filePath, content, 0644); err != nil {
+		if err := os.WriteFile(filePath, content, 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}
@@ -251,7 +251,7 @@ func TestSearch_SearchByPattern(t *testing.T) {
 	for _, filename := range testFiles {
 		filePath := filepath.Join(tempDir, filename)
 		content := make([]byte, 1024)
-		if err := os.WriteFile(filePath, content, 0644); err != nil {
+		if err := os.WriteFile(filePath, content, 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}
@@ -488,7 +488,7 @@ func BenchmarkSearch_SearchDirectory(b *testing.B) {
 	for i := 0; i < 100; i++ {
 		filename := filepath.Join(tempDir, fmt.Sprintf("document_%03d.pdf", i))
 		content := make([]byte, 1024)
-		if err := os.WriteFile(filename, content, 0644); err != nil {
+		if err := os.WriteFile(filename, content, 0o644); err != nil {
 			b.Fatalf("failed to create test file: %v", err)
 		}
 	}

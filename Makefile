@@ -2,7 +2,7 @@
 
 # Variables
 BINARY_NAME=mcp-pdf-reader
-MAIN_FILE=cmd/mcp-pdf-reader/main.go
+MAIN_PACKAGE=./cmd/mcp-pdf-reader
 BUILD_DIR=build
 INSTALL_DIR=$(shell go env GOPATH)/bin
 DEFAULT_PDF_DIR=$(HOME)/Documents
@@ -14,7 +14,7 @@ GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
-GOFMT=$(GOCMD) fmt
+GOFUMPT=gofumpt
 
 # Build flags
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || git describe --tags --always --dirty 2>/dev/null || echo 'dev')
@@ -25,20 +25,20 @@ LDFLAGS = -ldflags "$(VERSION_FLAGS)"
 
 # Default target
 .PHONY: all
-all: clean build
+all: clean deps build
 
 # Build the binary
 .PHONY: build
 build:
 	@echo "Building $(BINARY_NAME)..."
-	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) $(MAIN_FILE)
+	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) $(MAIN_PACKAGE)
 	@echo "Build complete: $(BINARY_NAME)"
 
 # Build for production (optimized)
 .PHONY: build-prod
 build-prod:
 	@echo "Building $(BINARY_NAME) for production..."
-	CGO_ENABLED=0 $(GOBUILD) $(LDFLAGS) -a -installsuffix cgo -o $(BINARY_NAME) $(MAIN_FILE)
+	CGO_ENABLED=0 $(GOBUILD) $(LDFLAGS) -a -installsuffix cgo -o $(BINARY_NAME) $(MAIN_PACKAGE)
 	@echo "Production build complete: $(BINARY_NAME)"
 
 # Clean build artifacts
@@ -76,7 +76,8 @@ test-coverage:
 .PHONY: fmt
 fmt:
 	@echo "Formatting code..."
-	$(GOFMT) ./...
+	@which $(GOFUMPT) > /dev/null || (echo "gofumpt not found. Install with: go install mvdan.cc/gofumpt@latest" && exit 1)
+	$(GOFUMPT) -w .
 
 # Lint code (requires golangci-lint)
 .PHONY: lint
@@ -84,6 +85,13 @@ lint:
 	@echo "Running linter..."
 	@which golangci-lint > /dev/null || (echo "golangci-lint not found. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest" && exit 1)
 	golangci-lint run
+
+# Security scan (requires gosec)
+.PHONY: gosec
+gosec:
+	@echo "Running security scan..."
+	@which gosec > /dev/null || (echo "gosec not found. Install with: go install github.com/securego/gosec/v2/cmd/gosec@latest" && exit 1)
+	gosec -conf .gosec.json ./...
 
 # Install binary using Go's standard install method
 .PHONY: install
@@ -143,19 +151,19 @@ build-all: clean
 	@mkdir -p $(BUILD_DIR)
 
 	# Linux AMD64
-	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 $(MAIN_FILE)
+	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 $(MAIN_PACKAGE)
 
 	# Linux ARM64
-	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 $(MAIN_FILE)
+	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 $(MAIN_PACKAGE)
 
 	# macOS AMD64
-	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 $(MAIN_FILE)
+	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 $(MAIN_PACKAGE)
 
 	# macOS ARM64 (Apple Silicon)
-	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 $(MAIN_FILE)
+	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 $(MAIN_PACKAGE)
 
 	# Windows AMD64
-	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe $(MAIN_FILE)
+	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe $(MAIN_PACKAGE)
 
 	@echo "Cross-compilation complete. Binaries in $(BUILD_DIR)/"
 
@@ -231,6 +239,7 @@ help:
 	@echo "Code Quality:"
 	@echo "  fmt           Format code"
 	@echo "  lint          Run linter (requires golangci-lint)"
+	@echo "  gosec         Run security scan (requires gosec)"
 	@echo ""
 	@echo "Dependencies:"
 	@echo "  deps          Install/update dependencies"

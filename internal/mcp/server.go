@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
-
 	"github.com/a3tai/mcp-pdf-reader/internal/config"
 	"github.com/a3tai/mcp-pdf-reader/internal/pdf"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 // Server represents the MCP server instance
@@ -39,15 +38,13 @@ func NewServer(cfg *config.Config, pdfService *pdf.Service) (*Server, error) {
 	}
 
 	// Register tools
-	if err := s.registerTools(); err != nil {
-		return nil, fmt.Errorf("failed to register tools: %w", err)
-	}
+	s.registerTools()
 
 	return s, nil
 }
 
 // registerTools registers all available MCP tools
-func (s *Server) registerTools() error {
+func (s *Server) registerTools() {
 	// Register PDF read file tool
 	pdfReadFileTool := mcp.NewTool(
 		"pdf_read_file",
@@ -114,8 +111,6 @@ func (s *Server) registerTools() error {
 		),
 	)
 	s.mcpServer.AddTool(pdfStatsDirectoryTool, s.handlePDFStatsDirectory)
-
-	return nil
 }
 
 // Handler functions
@@ -194,7 +189,9 @@ func (s *Server) handlePDFStatsFile(ctx context.Context, request mcp.CallToolReq
 	return mcp.NewToolResultText(responseText), nil
 }
 
-func (s *Server) handlePDFSearchDirectory(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handlePDFSearchDirectory(ctx context.Context, request mcp.CallToolRequest) (
+	*mcp.CallToolResult, error,
+) {
 	args := request.GetArguments()
 
 	directory := s.config.PDFDirectory // default
@@ -230,7 +227,9 @@ func (s *Server) handlePDFSearchDirectory(ctx context.Context, request mcp.CallT
 	return mcp.NewToolResultText(responseText), nil
 }
 
-func (s *Server) handlePDFStatsDirectory(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handlePDFStatsDirectory(ctx context.Context, request mcp.CallToolRequest) (
+	*mcp.CallToolResult, error,
+) {
 	args := request.GetArguments()
 
 	directory := s.config.PDFDirectory // default
@@ -270,7 +269,7 @@ func (s *Server) formatPDFSearchDirectoryResult(result *pdf.PDFSearchDirectoryRe
 }
 
 func (s *Server) formatPDFStatsDirectoryResult(result *pdf.PDFStatsDirectoryResult) string {
-	text := fmt.Sprintf("PDF Directory Statistics\n")
+	text := "PDF Directory Statistics\n"
 	text += fmt.Sprintf("Directory: %s\n", result.Directory)
 	text += fmt.Sprintf("Total PDF files: %d\n", result.TotalFiles)
 	text += fmt.Sprintf("Total size: %d bytes\n", result.TotalSize)
@@ -289,7 +288,7 @@ func (s *Server) formatPDFStatsDirectoryResult(result *pdf.PDFStatsDirectoryResu
 }
 
 func (s *Server) formatPDFStatsFileResult(result *pdf.PDFStatsFileResult) string {
-	text := fmt.Sprintf("PDF File Statistics\n")
+	text := "PDF File Statistics\n"
 	text += fmt.Sprintf("File: %s\n", result.Path)
 	text += fmt.Sprintf("Size: %d bytes\n", result.Size)
 	text += fmt.Sprintf("Pages: %d\n", result.Pages)
@@ -343,14 +342,17 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 // runStdioMode runs the server in stdio mode
-func (s *Server) runStdioMode(ctx context.Context) error {
+func (s *Server) runStdioMode(_ context.Context) error {
 	if s.config.IsDebug() {
 		log.Printf("Starting PDF MCP server in stdio mode")
 		log.Printf("PDF directory: %s", s.config.PDFDirectory)
 	}
 
 	// Use the mark3labs/mcp-go server.ServeStdio function
-	return server.ServeStdio(s.mcpServer)
+	if err := server.ServeStdio(s.mcpServer); err != nil {
+		return fmt.Errorf("failed to serve stdio: %w", err)
+	}
+	return nil
 }
 
 // runServerMode runs the server in HTTP server mode

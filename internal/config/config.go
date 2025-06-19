@@ -8,6 +8,21 @@ import (
 	"path/filepath"
 )
 
+const (
+	// Mode constants
+	ModeStdio  = "stdio"
+	ModeServer = "server"
+
+	// Default values
+	DefaultPort        = 8080
+	DefaultHost        = "127.0.0.1"
+	DefaultLogLevel    = "info"
+	DefaultMaxFileSize = 100 * 1024 * 1024 // 100MB
+
+	// Directory permissions
+	DefaultDirPerm = 0o750
+)
+
 // Config holds all configuration for the PDF MCP server
 type Config struct {
 	// Server configuration
@@ -27,18 +42,22 @@ type Config struct {
 
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
-	homeDir, _ := os.UserHomeDir()
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		// Fallback to current working directory if home directory cannot be determined
+		homeDir = "."
+	}
 	defaultPDFDir := filepath.Join(homeDir, "Documents")
 
 	return &Config{
-		Mode:         "stdio", // Default to stdio mode for MCP compatibility
-		Host:         "127.0.0.1",
-		Port:         8080,
+		Mode:         ModeStdio, // Default to stdio mode for MCP compatibility
+		Host:         DefaultHost,
+		Port:         DefaultPort,
 		PDFDirectory: defaultPDFDir,
 		Version:      "1.0.0",
 		ServerName:   "mcp-pdf-reader",
-		LogLevel:     "info",
-		MaxFileSize:  100 * 1024 * 1024, // 100MB
+		LogLevel:     DefaultLogLevel,
+		MaxFileSize:  DefaultMaxFileSize,
 	}
 }
 
@@ -79,12 +98,12 @@ func LoadFromFlags() (*Config, error) {
 // Validate checks if the configuration is valid
 func (c *Config) Validate() error {
 	// Validate mode
-	if c.Mode != "stdio" && c.Mode != "server" {
+	if c.Mode != ModeStdio && c.Mode != ModeServer {
 		return errors.New("mode must be either 'stdio' or 'server'")
 	}
 
 	// Validate port range (only for server mode)
-	if c.Mode == "server" && (c.Port < 1 || c.Port > 65535) {
+	if c.Mode == ModeServer && (c.Port < 1 || c.Port > 65535) {
 		return errors.New("port must be between 1 and 65535")
 	}
 
@@ -95,7 +114,7 @@ func (c *Config) Validate() error {
 
 	// Check if PDF directory exists, create if it doesn't
 	if _, err := os.Stat(c.PDFDirectory); os.IsNotExist(err) {
-		if err := os.MkdirAll(c.PDFDirectory, 0755); err != nil {
+		if err := os.MkdirAll(c.PDFDirectory, DefaultDirPerm); err != nil {
 			return fmt.Errorf("cannot create PDF directory %s: %w", c.PDFDirectory, err)
 		}
 	} else if err != nil {
@@ -139,10 +158,10 @@ func (c *Config) String() string {
 
 // IsServerMode returns true if the server is running in HTTP server mode
 func (c *Config) IsServerMode() bool {
-	return c.Mode == "server"
+	return c.Mode == ModeServer
 }
 
 // IsStdioMode returns true if the server is running in stdio mode
 func (c *Config) IsStdioMode() bool {
-	return c.Mode == "stdio"
+	return c.Mode == ModeStdio
 }

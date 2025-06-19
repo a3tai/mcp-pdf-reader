@@ -122,7 +122,7 @@ func (r *Reader) extractTextContent(pdfReader *pdf.Reader) (string, error) {
 	}
 
 	text := builder.String()
-	if len(text) == 0 {
+	if text == "" {
 		return "", fmt.Errorf("no text content could be extracted from PDF")
 	}
 

@@ -1,0 +1,77 @@
+{
+    "global": {
+        "nosec": "enabled",
+        "audit": "enabled"
+    },
+    "rules": {
+        "G101": {
+            "pattern": "(?i)passwd|pass|password|pwd|secret|token|jwt|key",
+            "ignore_entropy": false,
+            "entropy_threshold": "80.0",
+            "per_char_threshold": "3.0",
+            "truncate": "32"
+        },
+        "G104": {
+            "whitelist": [
+                "fmt\\.Print.*",
+                "bytes\\.Buffer\\.Write.*",
+                "strings\\.Builder\\.Write.*"
+            ]
+        },
+        "G204": {
+            "whitelist": [
+                "exec\\.Command"
+            ]
+        },
+        "G301": {
+            "mode": "0750"
+        },
+        "G302": {
+            "mode": "0600"
+        },
+        "G306": {
+            "mode": "0600"
+        }
+    },
+    "exclude": {
+        "G101": {
+            "description": "Exclude hardcoded credentials check for test files and examples",
+            "paths": [
+                "**/testdata/**/*",
+                "**/*_test.go",
+                "**/examples/**/*"
+            ]
+        },
+        "G104": {
+            "description": "Exclude unhandled errors for specific safe operations",
+            "paths": [
+                "**/testdata/**/*",
+                "**/*_test.go"
+            ]
+        }
+    },
+    "include": [
+        "G101",
+        "G102",
+        "G103",
+        "G104",
+        "G107",
+        "G201",
+        "G202",
+        "G203",
+        "G204",
+        "G301",
+        "G302",
+        "G303",
+        "G304",
+        "G305",
+        "G306",
+        "G307",
+        "G401",
+        "G402",
+        "G403",
+        "G404",
+        "G501",
+        "G505"
+    ]
+}

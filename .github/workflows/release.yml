@@ -58,10 +58,10 @@ jobs:
       - name: Run tests
         run: make test
 
-      - name: Run security scan
-        uses: securecodewarrior/github-action-gosec@master
+      - name: Run Gosec Security Scanner
+        uses: securego/gosec@master
         with:
-          args: "-no-fail ./..."
+          args: "-conf .gosec.json ./..."
 
   build:
     name: Build Release Binaries

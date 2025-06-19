@@ -64,6 +64,8 @@ func (s *Stats) GetFileStats(req PDFStatsFileRequest) (*PDFStatsFileResult, erro
 }
 
 // GetDirectoryStats returns statistics about PDF files in a directory
+//
+//nolint:gocognit // Function complexity is necessary for comprehensive directory analysis
 func (s *Stats) GetDirectoryStats(req PDFStatsDirectoryRequest) (*PDFStatsDirectoryResult, error) {
 	directory := req.Directory
 	if directory == "" {
@@ -84,7 +86,7 @@ func (s *Stats) GetDirectoryStats(req PDFStatsDirectoryRequest) (*PDFStatsDirect
 
 	err := filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Continue despite errors
+			return nil //nolint:nilerr // Continue despite errors
 		}
 
 		if info.IsDir() {
@@ -111,7 +113,6 @@ func (s *Stats) GetDirectoryStats(req PDFStatsDirectoryRequest) (*PDFStatsDirect
 
 		return nil
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("error walking directory: %w", err)
 	}

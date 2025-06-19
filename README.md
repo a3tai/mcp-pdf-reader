@@ -14,7 +14,7 @@ A robust **open source Model Context Protocol (MCP) server** for reading and ana
 - **📄 PDF Processing**: Read, validate, and extract text from PDF documents
 - **🔍 Smart Search**: Find PDF files with fuzzy search capabilities
 - **📊 Statistics**: Get comprehensive directory and file statistics
-- **🔄 Dual Mode Support**: 
+- **🔄 Dual Mode Support**:
   - **Stdio Mode**: Standard MCP protocol for AI assistants (Zed, Claude Desktop, etc.)
   - **Server Mode**: HTTP REST API with SSE transport for web integration
 - **⚡ Production Ready**: Comprehensive error handling, logging, and graceful shutdown
@@ -491,7 +491,7 @@ Add to your Cline settings in VS Code (`settings.json`):
 ```bash
 # For documentation in your project
 -pdfdir=./docs
--pdfdir=./documentation  
+-pdfdir=./documentation
 -pdfdir=./papers
 ```
 
@@ -518,7 +518,7 @@ You can run multiple instances for different directories:
     },
     "mcp-pdf-reader-research": {
       "command": {
-        "path": "mcp-pdf-reader", 
+        "path": "mcp-pdf-reader",
         "args": ["-pdfdir=/path/to/research", "-port=8081"]
       }
     }
@@ -610,7 +610,7 @@ make install
 
 3. **Check editor-specific config location**:
    - **Zed**: `~/.config/zed/settings.json`
-   - **Cursor**: `~/.cursor/settings.json` 
+   - **Cursor**: `~/.cursor/settings.json`
    - **Claude Desktop**: `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
    - **VS Code**: `.vscode/settings.json` (workspace) or user settings
 
@@ -709,7 +709,7 @@ ls -lh /path/to/pdfs/*.pdf
 - Check Zed's output panel for MCP errors
 - Use absolute paths if workspace variables don't work
 
-#### 🎯 **Cursor IDE**  
+#### 🎯 **Cursor IDE**
 - Restart Cursor after configuration changes
 - Check the "Output" tab for MCP-related logs
 - Ensure the MCP extension is enabled
@@ -797,7 +797,7 @@ mcp-pdf-reader/
 ├── cmd/mcp-pdf-reader/     # Main application entry point
 ├── internal/
 │   ├── config/             # Configuration management
-│   ├── mcp/               # MCP server implementation  
+│   ├── mcp/               # MCP server implementation
 │   └── pdf/               # PDF processing logic
 ├── Makefile               # Build and development commands
 ├── go.mod                 # Go module definition
@@ -863,6 +863,31 @@ POST /message              # MCP message endpoint
 - **Path Sanitization**: Prevents directory traversal attacks
 - **File Size Limits**: Configurable limits to prevent resource exhaustion
 - **Secure Defaults**: Safe configuration out of the box
+- **Automated Security Scanning**: Continuous security analysis with gosec
+
+### Security Scanning
+
+This project uses [gosec](https://github.com/securego/gosec) for automated security scanning of Go code. Security scans are automatically run on every pull request and release.
+
+#### Running Security Scans Locally
+
+```bash
+# Install gosec
+go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+# Run security scan
+make gosec
+
+# Or run directly with gosec
+gosec -conf .gosec.json ./...
+```
+
+#### Security Configuration
+
+Security scanning is configured via `.gosec.json` with:
+- Customized rules for Go security best practices
+- Exclusions for test files and false positives
+- Integration with GitHub Security tab via SARIF reports
 
 ## 📄 License
 
@@ -889,8 +914,10 @@ This project is **proudly open source** and maintained by contributors from arou
 
 **Rude Company LLC** is building innovative AI-powered development tools and open source solutions. We create intelligent systems that enhance developer productivity and enable seamless human-AI collaboration.
 
-- **GitHub**: [https://github.com/a3tai](https://github.com/a3tai)
-- **Open Source**: This project is freely available under the MIT license
+**A3T** is brought to you by Rude Company LLC and focuses on AI development tools and automation.
+
+- **Website**: [https://rude.la](https://rude.la)
+- **A3T Project GitHub**: [https://github.com/a3tai](https://github.com/a3tai)
 
 ## 📞 Support
 
@@ -900,4 +927,4 @@ This project is **proudly open source** and maintained by contributors from arou
 
 ---
 
-Built with ❤️ by Rude Company LLC and the open source community
+Built with ❤️ by Rude Company LLC.

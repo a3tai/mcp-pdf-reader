@@ -80,16 +80,16 @@ func TestValidator_ValidateFileInfo(t *testing.T) {
 	nonPDFPath := filepath.Join(tempDir, "document.txt")
 
 	// Create files with different sizes
-	if err := os.WriteFile(validPDFPath, make([]byte, 1024), 0644); err != nil {
+	if err := os.WriteFile(validPDFPath, make([]byte, 1024), 0o644); err != nil {
 		t.Fatalf("failed to create valid PDF: %v", err)
 	}
-	if err := os.WriteFile(largePDFPath, make([]byte, 2*1024*1024), 0644); err != nil {
+	if err := os.WriteFile(largePDFPath, make([]byte, 2*1024*1024), 0o644); err != nil {
 		t.Fatalf("failed to create large PDF: %v", err)
 	}
-	if err := os.WriteFile(emptyPDFPath, []byte{}, 0644); err != nil {
+	if err := os.WriteFile(emptyPDFPath, []byte{}, 0o644); err != nil {
 		t.Fatalf("failed to create empty PDF: %v", err)
 	}
-	if err := os.WriteFile(nonPDFPath, []byte("not a pdf"), 0644); err != nil {
+	if err := os.WriteFile(nonPDFPath, []byte("not a pdf"), 0o644); err != nil {
 		t.Fatalf("failed to create non-PDF: %v", err)
 	}
 
@@ -204,7 +204,7 @@ func TestValidator_validatePDFFile_EdgeCases(t *testing.T) {
 			filePath:    "fake.pdf",
 			expectError: true,
 			setupFunc: func(path string) error {
-				return os.WriteFile(path, []byte("This is not a PDF file"), 0644)
+				return os.WriteFile(path, []byte("This is not a PDF file"), 0o644)
 			},
 		},
 	}
@@ -261,7 +261,7 @@ func BenchmarkValidator_ValidateFileInfo(b *testing.B) {
 	defer os.RemoveAll(tempDir)
 
 	testFile := filepath.Join(tempDir, "test.pdf")
-	if err := os.WriteFile(testFile, make([]byte, 1024), 0644); err != nil {
+	if err := os.WriteFile(testFile, make([]byte, 1024), 0o644); err != nil {
 		b.Fatalf("failed to create test file: %v", err)
 	}
 

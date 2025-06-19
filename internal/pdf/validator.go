@@ -30,7 +30,7 @@ func (v *Validator) ValidateFile(req PDFValidateFileRequest) (*PDFValidateFileRe
 	err := v.validatePDFFile(req.Path)
 	if err != nil {
 		result.Message = err.Error()
-		return result, nil // Return result with validation error, not a processing error
+		return result, nil //nolint:nilerr // Return result with validation error, not a processing error
 	}
 
 	result.Valid = true

@@ -91,7 +91,7 @@ func TestServer_HandlePDFValidateFile(t *testing.T) {
 
 	// Create test file
 	testFile := filepath.Join(tempDir, "test.pdf")
-	if err := os.WriteFile(testFile, make([]byte, 1024), 0644); err != nil {
+	if err := os.WriteFile(testFile, make([]byte, 1024), 0o644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
@@ -147,7 +147,7 @@ func TestServer_HandlePDFSearchDirectory(t *testing.T) {
 	testFiles := []string{"doc1.pdf", "doc2.pdf", "report.txt"}
 	for _, filename := range testFiles {
 		filePath := filepath.Join(tempDir, filename)
-		if err := os.WriteFile(filePath, make([]byte, 1024), 0644); err != nil {
+		if err := os.WriteFile(filePath, make([]byte, 1024), 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}
@@ -210,7 +210,7 @@ func TestServer_HandlePDFStatsDirectory(t *testing.T) {
 
 	for filename, size := range testFiles {
 		filePath := filepath.Join(tempDir, filename)
-		if err := os.WriteFile(filePath, make([]byte, size), 0644); err != nil {
+		if err := os.WriteFile(filePath, make([]byte, size), 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}

@@ -108,7 +108,7 @@ func TestService_PDFValidateFile(t *testing.T) {
 
 	// Create test file
 	testFile := filepath.Join(tempDir, "test.pdf")
-	if err := os.WriteFile(testFile, make([]byte, 1024), 0644); err != nil {
+	if err := os.WriteFile(testFile, make([]byte, 1024), 0o644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
@@ -149,7 +149,7 @@ func TestService_PDFSearchDirectory(t *testing.T) {
 	testFiles := []string{"doc1.pdf", "doc2.pdf"}
 	for _, filename := range testFiles {
 		filePath := filepath.Join(tempDir, filename)
-		if err := os.WriteFile(filePath, make([]byte, 1024), 0644); err != nil {
+		if err := os.WriteFile(filePath, make([]byte, 1024), 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}
@@ -196,7 +196,7 @@ func TestService_PDFStatsDirectory(t *testing.T) {
 
 	for filename, size := range testFiles {
 		filePath := filepath.Join(tempDir, filename)
-		if err := os.WriteFile(filePath, make([]byte, size), 0644); err != nil {
+		if err := os.WriteFile(filePath, make([]byte, size), 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}
@@ -279,7 +279,7 @@ func TestService_CountPDFsInDirectory(t *testing.T) {
 
 	for _, filename := range append(pdfFiles, nonPdfFiles...) {
 		filePath := filepath.Join(tempDir, filename)
-		if err := os.WriteFile(filePath, make([]byte, 1024), 0644); err != nil {
+		if err := os.WriteFile(filePath, make([]byte, 1024), 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}
@@ -311,7 +311,7 @@ func TestService_FindPDFsInDirectory(t *testing.T) {
 
 	for _, filename := range append(pdfFiles, nonPdfFiles...) {
 		filePath := filepath.Join(tempDir, filename)
-		if err := os.WriteFile(filePath, make([]byte, 1024), 0644); err != nil {
+		if err := os.WriteFile(filePath, make([]byte, 1024), 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}
@@ -354,7 +354,7 @@ func TestService_SearchByPattern(t *testing.T) {
 
 	for _, filename := range testFiles {
 		filePath := filepath.Join(tempDir, filename)
-		if err := os.WriteFile(filePath, make([]byte, 1024), 0644); err != nil {
+		if err := os.WriteFile(filePath, make([]byte, 1024), 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}

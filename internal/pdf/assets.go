@@ -7,6 +7,13 @@ import (
 	"github.com/ledongthuc/pdf"
 )
 
+const (
+	// RGBComponentCount represents the number of color components in RGB
+	RGBComponentCount = 3
+	// BitsPerByte represents the number of bits in a byte
+	BitsPerByte = 8
+)
+
 // Assets handles PDF asset extraction operations
 type Assets struct {
 	maxFileSize int64
@@ -48,10 +55,8 @@ func (a *Assets) ExtractAssets(req PDFAssetsFileRequest) (*PDFAssetsFileResult, 
 	}
 	defer f.Close()
 
-	var images []ImageInfo
-
 	// Scan through pages looking for images
-	images = a.extractImagesFromPages(r)
+	images := a.extractImagesFromPages(r)
 
 	result := &PDFAssetsFileResult{
 		Path:       req.Path,
@@ -178,8 +183,8 @@ func (a *Assets) extractImageInfo(obj pdf.Value, pageNum int) *ImageInfo {
 	// Estimate size (this is approximate)
 	if imageInfo.Width > 0 && imageInfo.Height > 0 {
 		// Rough estimation: width * height * (bits per component / 8) * components
-		// Assume 3 components (RGB) for estimation
-		estimatedSize := int64(imageInfo.Width * imageInfo.Height * (bitsPerComponent / 8) * 3)
+		// Assume RGB components for estimation
+		estimatedSize := int64(imageInfo.Width * imageInfo.Height * (bitsPerComponent / BitsPerByte) * RGBComponentCount)
 		imageInfo.Size = estimatedSize
 	}
 

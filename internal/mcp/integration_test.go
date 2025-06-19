@@ -23,7 +23,7 @@ func TestServerIntegration(t *testing.T) {
 	testFiles := []string{"doc1.pdf", "doc2.pdf"}
 	for _, filename := range testFiles {
 		filePath := filepath.Join(tempDir, filename)
-		if err := os.WriteFile(filePath, make([]byte, 1024), 0644); err != nil {
+		if err := os.WriteFile(filePath, make([]byte, 1024), 0o644); err != nil {
 			t.Fatalf("failed to create test file %s: %v", filename, err)
 		}
 	}

@@ -38,7 +38,7 @@ func (s *Search) SearchDirectory(req PDFSearchDirectoryRequest) (*PDFSearchDirec
 	err := filepath.Walk(req.Directory, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			// Continue walking even if we encounter an error with a specific file
-			return nil
+			return nil //nolint:nilerr // Intentionally continue on file errors
 		}
 
 		// Skip directories
@@ -54,7 +54,7 @@ func (s *Search) SearchDirectory(req PDFSearchDirectoryRequest) (*PDFSearchDirec
 		// Quick validation without opening the file
 		if err := s.validator.ValidateFileInfo(path, info); err != nil {
 			// Skip invalid files but continue processing
-			return nil
+			return nil //nolint:nilerr // Intentionally continue on validation errors
 		}
 
 		// Apply query filter if provided
@@ -73,7 +73,6 @@ func (s *Search) SearchDirectory(req PDFSearchDirectoryRequest) (*PDFSearchDirec
 		pdfFiles = append(pdfFiles, fileInfo)
 		return nil
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("error walking directory: %w", err)
 	}
@@ -190,7 +189,7 @@ func (s *Search) SearchByPattern(directory, pattern string) (*PDFSearchDirectory
 
 	err := filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // Intentionally continue on file errors
 		}
 
 		if info.IsDir() {
@@ -203,13 +202,13 @@ func (s *Search) SearchByPattern(directory, pattern string) (*PDFSearchDirectory
 
 		// Validate file
 		if err := s.validator.ValidateFileInfo(path, info); err != nil {
-			return nil
+			return nil //nolint:nilerr // Intentionally continue on validation errors
 		}
 
 		// Check if filename matches pattern
 		matched, err := filepath.Match(pattern, info.Name())
 		if err != nil {
-			return nil // Continue on pattern error
+			return nil //nolint:nilerr // Continue on pattern error
 		}
 
 		if matched {
@@ -224,7 +223,6 @@ func (s *Search) SearchByPattern(directory, pattern string) (*PDFSearchDirectory
 
 		return nil
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("error walking directory: %w", err)
 	}

@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"regexp"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -21,6 +24,10 @@ type StreamParser struct {
 	// Caches for performance
 	xrefCache   *LRUCache
 	objectCache *LRUCache
+
+	// XRef table for object resolution
+	xrefTable map[int]XRefEntry
+	xrefMutex sync.RWMutex
 
 	// Memory management
 	memMutex   sync.RWMutex
@@ -85,6 +92,7 @@ func NewStreamParser(reader io.ReadSeeker, opts ...StreamOptions) (*StreamParser
 		gcTrigger:   options.GCTrigger,
 		xrefCache:   NewLRUCache(options.XRefCacheSize),
 		objectCache: NewLRUCache(options.ObjectCacheSize),
+		xrefTable:   make(map[int]XRefEntry),
 		options:     options,
 	}
 
@@ -94,6 +102,18 @@ func NewStreamParser(reader io.ReadSeeker, opts ...StreamOptions) (*StreamParser
 			return make([]byte, chunkSize)
 		},
 	}
+
+	// Parse XRef table during initialization
+	if err := parser.ParseXRefTable(); err != nil {
+		// Don't fail completely if XRef parsing fails - some PDFs might be recoverable
+		// Try to build a basic XRef table by scanning for objects
+		parser.buildBasicXRefTable()
+	}
+
+	// Reset reader position to beginning after XRef parsing
+	parser.reader.Seek(0, io.SeekStart)
+	parser.buffReader.Reset(parser.reader)
+	parser.offset = 0
 
 	return parser, nil
 }
@@ -243,6 +263,295 @@ func (sp *StreamParser) ClearCaches() {
 	sp.memMutex.Lock()
 	sp.currentMem = 0
 	sp.memMutex.Unlock()
+}
+
+// GetObject retrieves a PDF object by its ID and generation
+func (sp *StreamParser) GetObject(objID, generation int) (*PDFObject, error) {
+	// Check cache first
+	cacheKey := fmt.Sprintf("%d_%d", objID, generation)
+	if cached, found := sp.objectCache.Get(cacheKey); found && cached != nil {
+		if obj, ok := cached.(*PDFObject); ok {
+			return obj, nil
+		}
+	}
+
+	// Look up in XRef table
+	sp.xrefMutex.RLock()
+	entry, exists := sp.xrefTable[objID]
+	sp.xrefMutex.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("object %d %d not found", objID, generation)
+	}
+
+	if !entry.InUse {
+		return nil, fmt.Errorf("object %d %d is not in use", objID, generation)
+	}
+
+	// Parse object at the specified offset
+	obj, err := sp.parseObjectAt(entry.Offset, objID, generation)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse object %d %d: %w", objID, generation, err)
+	}
+
+	// Cache the result
+	sp.objectCache.Put(cacheKey, obj)
+	return obj, nil
+}
+
+// parseObjectAt parses a PDF object at the given offset
+func (sp *StreamParser) parseObjectAt(offset int64, expectedObjID, expectedGeneration int) (*PDFObject, error) {
+	// Save current position
+	currentPos, _ := sp.reader.Seek(0, io.SeekCurrent)
+	defer sp.reader.Seek(currentPos, io.SeekStart)
+
+	// Seek to object position
+	_, err := sp.reader.Seek(offset, io.SeekStart)
+	if err != nil {
+		return nil, fmt.Errorf("failed to seek to offset %d: %w", offset, err)
+	}
+
+	// Read a chunk containing the object
+	sp.buffReader.Reset(sp.reader)
+	buffer := make([]byte, 4096) // Read up to 4KB
+	n, err := sp.buffReader.Read(buffer)
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("failed to read object data: %w", err)
+	}
+
+	content := string(buffer[:n])
+
+	// Parse object header and content (use (?s) flag to make . match newlines)
+	objRegex := regexp.MustCompile(fmt.Sprintf(`(?s)%d\s+%d\s+obj\s*(.*?)\s*endobj`, expectedObjID, expectedGeneration))
+	matches := objRegex.FindStringSubmatch(content)
+	if len(matches) < 2 {
+		return nil, fmt.Errorf("object %d %d not found at offset %d", expectedObjID, expectedGeneration, offset)
+	}
+
+	objContent := strings.TrimSpace(matches[1])
+
+	return &PDFObject{
+		Number:     expectedObjID,
+		Generation: expectedGeneration,
+		Offset:     offset,
+		Length:     int64(len(objContent)),
+		Content:    objContent,
+	}, nil
+}
+
+// ParseXRefTable parses the cross-reference table from the PDF
+func (sp *StreamParser) ParseXRefTable() error {
+	// Find startxref
+	startxrefOffset, err := sp.findStartXRef()
+	if err != nil {
+		return fmt.Errorf("failed to find startxref: %w", err)
+	}
+
+	// Parse XRef table at the found offset
+	return sp.parseXRefAt(startxrefOffset)
+}
+
+// findStartXRef finds the startxref offset in the PDF
+func (sp *StreamParser) findStartXRef() (int64, error) {
+	// Read the last 1024 bytes of the file to find startxref
+	fileSize, err := sp.reader.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, fmt.Errorf("failed to seek to end: %w", err)
+	}
+
+	readSize := int64(1024)
+	if fileSize < readSize {
+		readSize = fileSize
+	}
+
+	_, err = sp.reader.Seek(fileSize-readSize, io.SeekStart)
+	if err != nil {
+		return 0, fmt.Errorf("failed to seek to read position: %w", err)
+	}
+
+	buffer := make([]byte, readSize)
+	n, err := sp.reader.Read(buffer)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read end of file: %w", err)
+	}
+
+	content := string(buffer[:n])
+
+	// Find startxref keyword
+	startxrefRegex := regexp.MustCompile(`startxref\s+(\d+)`)
+	matches := startxrefRegex.FindStringSubmatch(content)
+	if len(matches) < 2 {
+		return 0, fmt.Errorf("startxref not found")
+	}
+
+	offset, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid startxref offset: %w", err)
+	}
+
+	return offset, nil
+}
+
+// parseXRefAt parses the XRef table at the given offset
+func (sp *StreamParser) parseXRefAt(offset int64) error {
+	// Seek to XRef table
+	_, err := sp.reader.Seek(offset, io.SeekStart)
+	if err != nil {
+		return fmt.Errorf("failed to seek to xref at %d: %w", offset, err)
+	}
+
+	sp.buffReader.Reset(sp.reader)
+
+	// Read xref keyword
+	line, err := sp.buffReader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read xref keyword: %w", err)
+	}
+
+	if !strings.HasPrefix(strings.TrimSpace(line), "xref") {
+		return fmt.Errorf("expected 'xref' keyword, got: %s", strings.TrimSpace(line))
+	}
+
+	// Parse xref entries
+	for {
+		line, err := sp.buffReader.ReadString('\n')
+		if err != nil {
+			break
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "trailer") {
+			break
+		}
+
+		// Parse subsection header (start count)
+		parts := strings.Fields(line)
+		if len(parts) == 2 {
+			start, err1 := strconv.Atoi(parts[0])
+			count, err2 := strconv.Atoi(parts[1])
+			if err1 == nil && err2 == nil {
+				// Parse entries for this subsection
+				for i := 0; i < count; i++ {
+					entryLine, err := sp.buffReader.ReadString('\n')
+					if err != nil {
+						break
+					}
+					sp.parseXRefEntry(start+i, strings.TrimSpace(entryLine))
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// parseXRefEntry parses a single XRef entry
+func (sp *StreamParser) parseXRefEntry(objID int, line string) {
+	parts := strings.Fields(line)
+	if len(parts) >= 3 {
+		offset, err1 := strconv.ParseInt(parts[0], 10, 64)
+		generation, err2 := strconv.Atoi(parts[1])
+		flag := parts[2]
+
+		if err1 == nil && err2 == nil {
+			entry := XRefEntry{
+				Offset:     offset,
+				Generation: generation,
+				InUse:      flag == "n",
+			}
+
+			sp.xrefMutex.Lock()
+			sp.xrefTable[objID] = entry
+			sp.xrefMutex.Unlock()
+		}
+	}
+}
+
+// buildBasicXRefTable builds a basic XRef table by scanning for objects
+func (sp *StreamParser) buildBasicXRefTable() error {
+	// Save current position
+	currentPos, _ := sp.reader.Seek(0, io.SeekCurrent)
+	defer sp.reader.Seek(currentPos, io.SeekStart)
+
+	// Seek to beginning
+	_, err := sp.reader.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+
+	sp.buffReader.Reset(sp.reader)
+
+	// Scan through the file looking for object headers
+	var buffer []byte
+	var offset int64 = 0
+	var foundObjects = false
+
+	for {
+		chunk := make([]byte, 4096)
+		n, err := sp.buffReader.Read(chunk)
+		if err != nil && err != io.EOF {
+			break
+		}
+		if n == 0 {
+			break
+		}
+
+		buffer = append(buffer, chunk[:n]...)
+
+		// Look for object patterns in the buffer
+		content := string(buffer)
+		objRegex := regexp.MustCompile(`(\d+)\s+(\d+)\s+obj`)
+		matches := objRegex.FindAllStringSubmatchIndex(content, -1)
+
+		for _, match := range matches {
+			if len(match) >= 6 {
+				objIDStr := content[match[2]:match[3]]
+				generationStr := content[match[4]:match[5]]
+
+				objID, err1 := strconv.Atoi(objIDStr)
+				generation, err2 := strconv.Atoi(generationStr)
+
+				if err1 == nil && err2 == nil {
+					objOffset := offset + int64(match[0])
+
+					entry := XRefEntry{
+						Offset:     objOffset,
+						Generation: generation,
+						InUse:      true,
+					}
+
+					sp.xrefMutex.Lock()
+					sp.xrefTable[objID] = entry
+					sp.xrefMutex.Unlock()
+					foundObjects = true
+				}
+			}
+		}
+
+		// Keep only the last 1KB of buffer to handle objects spanning chunks
+		if len(buffer) > 5120 {
+			offset += int64(len(buffer) - 1024)
+			buffer = buffer[len(buffer)-1024:]
+		}
+
+		if err == io.EOF {
+			break
+		}
+	}
+
+	// If no objects were found, this is likely not a valid PDF
+	if !foundObjects {
+		return fmt.Errorf("no PDF objects found in file")
+	}
+
+	return nil
+}
+
+// SetXRefTable allows external setting of the XRef table
+func (sp *StreamParser) SetXRefTable(xrefTable map[int]XRefEntry) {
+	sp.xrefMutex.Lock()
+	sp.xrefTable = xrefTable
+	sp.xrefMutex.Unlock()
 }
 
 // Close releases all resources held by the parser

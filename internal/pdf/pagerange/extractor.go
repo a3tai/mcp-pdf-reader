@@ -189,6 +189,11 @@ func (pre *PageRangeExtractor) ExtractRange(reader io.ReadSeeker, ranges []PageR
 		return nil, fmt.Errorf("failed to build page index: %w", err)
 	}
 
+	// Check if we have any pages
+	if pre.pageIndex.TotalPages == 0 {
+		return nil, fmt.Errorf("no pages found in PDF")
+	}
+
 	// Validate ranges
 	validRanges := pre.validateRanges(ranges)
 
@@ -244,21 +249,12 @@ func (pre *PageRangeExtractor) buildPageIndex(reader io.ReadSeeker) error {
 		Resources:   make(map[int][]ObjectRef),
 	}
 
-	// Find page objects by scanning for page object patterns
-	pageObjects, err := pre.findPageObjects(reader)
+	// Build page index using proper PDF structure
+	err := pre.buildPageIndexFromCatalog()
 	if err != nil {
-		return fmt.Errorf("failed to find page objects: %w", err)
+		// Fallback to pattern matching if catalog parsing fails
+		return pre.buildPageIndexFromPatterns(reader)
 	}
-
-	// Build index from found page objects
-	pageNum := 1
-	for _, obj := range pageObjects {
-		pre.pageIndex.PageOffsets[pageNum] = obj.Offset
-		pre.pageIndex.PageObjects[pageNum] = obj
-		pageNum++
-	}
-
-	pre.pageIndex.TotalPages = pageNum - 1
 
 	// Extract resource references for each page
 	for pageNum := 1; pageNum <= pre.pageIndex.TotalPages; pageNum++ {
@@ -273,8 +269,87 @@ func (pre *PageRangeExtractor) buildPageIndex(reader io.ReadSeeker) error {
 	return nil
 }
 
-// findPageObjects finds all page objects in the PDF by pattern matching
-func (pre *PageRangeExtractor) findPageObjects(reader io.ReadSeeker) ([]ObjectRef, error) {
+// buildPageIndexFromCatalog builds the page index using the PDF catalog structure
+func (pre *PageRangeExtractor) buildPageIndexFromCatalog() error {
+	// Find the catalog object (object 1 in most PDFs)
+	catalogObj, err := pre.streamParser.GetObject(1, 0)
+	if err != nil {
+		return fmt.Errorf("failed to get catalog object: %w", err)
+	}
+
+	// Extract Pages reference from catalog
+	pagesRegex := regexp.MustCompile(`/Pages\s+(\d+)\s+(\d+)\s+R`)
+	matches := pagesRegex.FindStringSubmatch(catalogObj.Content)
+	if len(matches) < 3 {
+		return fmt.Errorf("Pages reference not found in catalog")
+	}
+
+	pagesObjID, _ := strconv.Atoi(matches[1])
+	pagesGeneration, _ := strconv.Atoi(matches[2])
+
+	// Get the Pages object
+	pagesObj, err := pre.streamParser.GetObject(pagesObjID, pagesGeneration)
+	if err != nil {
+		return fmt.Errorf("failed to get Pages object %d %d: %w", pagesObjID, pagesGeneration, err)
+	}
+
+	// Parse the page tree
+	pageNum := 1
+	err = pre.parsePageTree(pagesObj.Content, &pageNum, pagesObjID)
+	if err != nil {
+		return fmt.Errorf("failed to parse page tree: %w", err)
+	}
+
+	pre.pageIndex.TotalPages = pageNum - 1
+	return nil
+}
+
+// parsePageTree recursively parses the page tree structure
+func (pre *PageRangeExtractor) parsePageTree(content string, pageNum *int, objID int) error {
+	// Check if this is a Pages node or a Page node
+	// Be more specific: check for "/Type /Page" but not "/Type /Pages"
+	if strings.Contains(content, "/Type /Page") && !strings.Contains(content, "/Type /Pages") {
+		// This is a Page object - use the actual object ID
+		objRef := ObjectRef{
+			ObjectID:   objID,
+			Generation: 0,
+			Offset:     0, // Will be filled by XRef table
+		}
+
+		pre.pageIndex.PageObjects[*pageNum] = objRef
+		pre.pageIndex.PageOffsets[*pageNum] = 0 // Will be filled by XRef table
+		*pageNum++
+		return nil
+	}
+
+	// This is a Pages node - find Kids array
+	kidsRegex := regexp.MustCompile(`/Kids\s*\[\s*((?:\d+\s+\d+\s+R\s*)+)\]`)
+	matches := kidsRegex.FindStringSubmatch(content)
+	if len(matches) < 2 {
+		return fmt.Errorf("Kids array not found in Pages object")
+	}
+
+	// Parse kid references
+	kidRefs := parseObjectReferences(matches[1])
+	for _, kidRef := range kidRefs {
+		// Get the kid object
+		kidObj, err := pre.streamParser.GetObject(kidRef.ObjectID, kidRef.Generation)
+		if err != nil {
+			continue // Skip problematic kids
+		}
+
+		// Recursively parse the kid
+		err = pre.parsePageTree(kidObj.Content, pageNum, kidRef.ObjectID)
+		if err != nil {
+			continue // Skip problematic kids
+		}
+	}
+
+	return nil
+}
+
+// buildPageIndexFromPatterns builds the page index using pattern matching (fallback)
+func (pre *PageRangeExtractor) buildPageIndexFromPatterns(reader io.ReadSeeker) error {
 	var pageObjects []ObjectRef
 
 	err := pre.streamParser.ProcessInChunks(func(chunk []byte, offset int64) error {
@@ -302,7 +377,42 @@ func (pre *PageRangeExtractor) findPageObjects(reader io.ReadSeeker) ([]ObjectRe
 		return nil
 	})
 
-	return pageObjects, err
+	if err != nil {
+		return err
+	}
+
+	// Build index from found page objects
+	pageNum := 1
+	for _, obj := range pageObjects {
+		pre.pageIndex.PageOffsets[pageNum] = obj.Offset
+		pre.pageIndex.PageObjects[pageNum] = obj
+		pageNum++
+	}
+
+	pre.pageIndex.TotalPages = pageNum - 1
+	return nil
+}
+
+// parseObjectReferences parses object references from a string
+func parseObjectReferences(content string) []ObjectRef {
+	var refs []ObjectRef
+
+	refRegex := regexp.MustCompile(`(\d+)\s+(\d+)\s+R`)
+	matches := refRegex.FindAllStringSubmatch(content, -1)
+
+	for _, match := range matches {
+		if len(match) >= 3 {
+			objID, _ := strconv.Atoi(match[1])
+			generation, _ := strconv.Atoi(match[2])
+
+			refs = append(refs, ObjectRef{
+				ObjectID:   objID,
+				Generation: generation,
+			})
+		}
+	}
+
+	return refs
 }
 
 // validateRanges validates and normalizes page ranges
@@ -372,14 +482,14 @@ func (pre *PageRangeExtractor) preloadObjects(reader io.ReadSeeker, objects []Ob
 			continue
 		}
 
-		// Parse and cache object
-		objContent, err := pre.parseObjectAt(reader, obj)
+		// Use StreamParser's GetObject method
+		pdfObj, err := pre.streamParser.GetObject(obj.ObjectID, obj.Generation)
 		if err != nil {
 			// Continue with other objects if one fails
 			continue
 		}
 
-		pre.cache.Put(obj, objContent)
+		pre.cache.Put(obj, pdfObj.Content)
 	}
 
 	return nil
@@ -439,10 +549,12 @@ func (pre *PageRangeExtractor) extractPageResources(reader io.ReadSeeker, pageNu
 		return nil, fmt.Errorf("page %d not found", pageNum)
 	}
 
-	objContent, err := pre.parseObjectAt(reader, pageObj)
+	pdfObj, err := pre.streamParser.GetObject(pageObj.ObjectID, pageObj.Generation)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get page object %d %d: %w", pageObj.ObjectID, pageObj.Generation, err)
 	}
+
+	objContent := pdfObj.Content
 
 	var resources []ObjectRef
 
@@ -487,11 +599,13 @@ func (pre *PageRangeExtractor) getOrParseObject(reader io.ReadSeeker, obj Object
 		}
 	}
 
-	// Parse object
-	content, err := pre.parseObjectAt(reader, obj)
+	// Use StreamParser's GetObject method
+	pdfObj, err := pre.streamParser.GetObject(obj.ObjectID, obj.Generation)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get object %d %d: %w", obj.ObjectID, obj.Generation, err)
 	}
+
+	content := pdfObj.Content
 
 	// Cache for future use
 	pre.cache.Put(obj, content)

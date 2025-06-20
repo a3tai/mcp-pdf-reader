@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/a3tai/mcp-pdf-reader/internal/pdf/streaming"
 )
 
 // PageIndex represents an efficient index of page locations and metadata
@@ -43,9 +45,10 @@ type XRefEntry struct {
 
 // PageIndexBuilder builds page indexes efficiently
 type PageIndexBuilder struct {
-	index       *PageIndex
-	objectCache map[string]string
-	patterns    *IndexPatterns
+	index        *PageIndex
+	objectCache  map[string]string
+	patterns     *IndexPatterns
+	streamParser *streaming.StreamParser
 }
 
 // IndexPatterns contains compiled regex patterns for efficient parsing
@@ -99,256 +102,31 @@ func (pib *PageIndexBuilder) BuildFromReader(reader io.ReadSeeker) (*PageIndex, 
 		return nil, fmt.Errorf("failed to seek to start: %w", err)
 	}
 
-	// Step 1: Find and parse the cross-reference table
-	if err := pib.buildXRefTable(reader); err != nil {
-		return nil, fmt.Errorf("failed to build xref table: %w", err)
-	}
-
-	// Step 2: Find the document catalog
-	catalog, err := pib.findCatalog(reader)
+	// Create StreamParser for object resolution
+	pib.streamParser, err = streaming.NewStreamParser(reader, streaming.StreamOptions{
+		ChunkSizeMB:     1,   // 1MB chunks
+		MaxMemoryMB:     100, // 100MB max
+		XRefCacheSize:   1000,
+		ObjectCacheSize: 1000,
+		GCTrigger:       0.8,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to find catalog: %w", err)
+		return nil, fmt.Errorf("failed to create stream parser: %w", err)
 	}
+	defer pib.streamParser.Close()
 
-	// Step 3: Build page tree from catalog
-	if err := pib.buildPageTree(reader, catalog); err != nil {
+	// Step 1: Build page tree from catalog (StreamParser handles XRef internally)
+	if err := pib.buildPageTreeFromCatalog(); err != nil {
 		return nil, fmt.Errorf("failed to build page tree: %w", err)
 	}
 
-	// Step 4: Extract page-specific resources
+	// Step 2: Extract page-specific resources
 	if err := pib.extractPageResources(reader); err != nil {
 		return nil, fmt.Errorf("failed to extract page resources: %w", err)
 	}
 
 	pib.index.BuildTime = getCurrentTimeMillis() - startTime
 	return pib.index, nil
-}
-
-// buildXRefTable builds the cross-reference table
-func (pib *PageIndexBuilder) buildXRefTable(reader io.ReadSeeker) error {
-	// Seek to end of file to find startxref
-	_, err := reader.Seek(-1024, io.SeekEnd)
-	if err != nil {
-		return fmt.Errorf("failed to seek to end: %w", err)
-	}
-
-	// Read last part of file
-	buffer := make([]byte, 1024)
-	n, err := reader.Read(buffer)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to read end of file: %w", err)
-	}
-
-	content := string(buffer[:n])
-
-	// Find startxref offset
-	startxrefRegex := regexp.MustCompile(`startxref\s*(\d+)`)
-	matches := startxrefRegex.FindStringSubmatch(content)
-	if len(matches) < 2 {
-		return fmt.Errorf("startxref not found")
-	}
-
-	xrefOffset, err := strconv.ParseInt(matches[1], 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid xref offset: %w", err)
-	}
-
-	// Read xref table
-	_, err = reader.Seek(xrefOffset, io.SeekStart)
-	if err != nil {
-		return fmt.Errorf("failed to seek to xref: %w", err)
-	}
-
-	xrefBuffer := make([]byte, 4096)
-	n, err = reader.Read(xrefBuffer)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to read xref: %w", err)
-	}
-
-	return pib.parseXRefTable(string(xrefBuffer[:n]))
-}
-
-// parseXRefTable parses the cross-reference table content
-func (pib *PageIndexBuilder) parseXRefTable(content string) error {
-	lines := strings.Split(content, "\n")
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-
-		if line == "xref" {
-			continue
-		}
-
-		if strings.HasPrefix(line, "trailer") {
-			break
-		}
-
-		// Parse subsection header (start count)
-		if strings.Contains(line, " ") && !strings.Contains(line, " n") && !strings.Contains(line, " f") {
-			continue
-		}
-
-		// Parse xref entry
-		if len(line) == 18 { // Standard xref entry length
-			parts := strings.Fields(line)
-			if len(parts) >= 3 {
-				offset, err := strconv.ParseInt(parts[0], 10, 64)
-				if err != nil {
-					continue
-				}
-
-				generation, err := strconv.Atoi(parts[1])
-				if err != nil {
-					continue
-				}
-
-				flag := parts[2]
-				objID := len(pib.index.XRefTable)
-
-				pib.index.XRefTable[objID] = XRefEntry{
-					ObjectID:   objID,
-					Generation: generation,
-					Offset:     offset,
-					InUse:      flag == "n",
-					Type:       "normal",
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// findCatalog finds the document catalog object
-func (pib *PageIndexBuilder) findCatalog(reader io.ReadSeeker) (ObjectRef, error) {
-	// Look for catalog reference in trailer
-	_, err := reader.Seek(-2048, io.SeekEnd)
-	if err != nil {
-		return ObjectRef{}, fmt.Errorf("failed to seek to trailer: %w", err)
-	}
-
-	buffer := make([]byte, 2048)
-	n, err := reader.Read(buffer)
-	if err != nil && err != io.EOF {
-		return ObjectRef{}, fmt.Errorf("failed to read trailer: %w", err)
-	}
-
-	content := string(buffer[:n])
-
-	// Find Root reference in trailer
-	rootRegex := regexp.MustCompile(`/Root\s+(\d+)\s+(\d+)\s+R`)
-	matches := rootRegex.FindStringSubmatch(content)
-	if len(matches) >= 3 {
-		objID, _ := strconv.Atoi(matches[1])
-		generation, _ := strconv.Atoi(matches[2])
-
-		// Find offset from xref table
-		var offset int64
-		if entry, exists := pib.index.XRefTable[objID]; exists {
-			offset = entry.Offset
-		}
-
-		return ObjectRef{
-			ObjectID:   objID,
-			Generation: generation,
-			Offset:     offset,
-		}, nil
-	}
-
-	return ObjectRef{}, fmt.Errorf("catalog not found in trailer")
-}
-
-// buildPageTree builds the page tree structure
-func (pib *PageIndexBuilder) buildPageTree(reader io.ReadSeeker, catalog ObjectRef) error {
-	// Parse catalog object
-	catalogContent, err := pib.parseObjectAt(reader, catalog)
-	if err != nil {
-		return fmt.Errorf("failed to parse catalog: %w", err)
-	}
-
-	// Find Pages reference
-	pagesRegex := regexp.MustCompile(`/Pages\s+(\d+)\s+(\d+)\s+R`)
-	matches := pagesRegex.FindStringSubmatch(catalogContent)
-	if len(matches) < 3 {
-		return fmt.Errorf("Pages reference not found in catalog")
-	}
-
-	pagesObjID, _ := strconv.Atoi(matches[1])
-	pagesGeneration, _ := strconv.Atoi(matches[2])
-
-	var pagesOffset int64
-	if entry, exists := pib.index.XRefTable[pagesObjID]; exists {
-		pagesOffset = entry.Offset
-	}
-
-	pagesRef := ObjectRef{
-		ObjectID:   pagesObjID,
-		Generation: pagesGeneration,
-		Offset:     pagesOffset,
-	}
-
-	// Build page tree starting from root
-	pageNum := 1
-	pib.index.PageTree, err = pib.buildPageTreeNode(reader, pagesRef, nil, &pageNum)
-	if err != nil {
-		return fmt.Errorf("failed to build page tree: %w", err)
-	}
-
-	pib.index.TotalPages = pageNum - 1
-	return nil
-}
-
-// buildPageTreeNode recursively builds a page tree node
-func (pib *PageIndexBuilder) buildPageTreeNode(reader io.ReadSeeker, objRef ObjectRef, parent *PageTreeNode, pageNum *int) (*PageTreeNode, error) {
-	// Parse the object
-	content, err := pib.parseObjectAt(reader, objRef)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse object %d: %w", objRef.ObjectID, err)
-	}
-
-	node := &PageTreeNode{
-		ObjectRef: objRef,
-		Parent:    parent,
-		Kids:      []*PageTreeNode{},
-	}
-
-	// Determine if this is a Pages or Page object
-	if strings.Contains(content, "/Type /Pages") {
-		node.Type = "Pages"
-
-		// Find Kids array
-		kidsRegex := regexp.MustCompile(`/Kids\s*\[\s*((?:\d+\s+\d+\s+R\s*)+)\]`)
-		matches := kidsRegex.FindStringSubmatch(content)
-		if len(matches) > 1 {
-			// Parse kid references
-			kidRefs := parseObjectReferences(matches[1])
-
-			for _, kidRef := range kidRefs {
-				// Find offset for kid
-				if entry, exists := pib.index.XRefTable[kidRef.ObjectID]; exists {
-					kidRef.Offset = entry.Offset
-				}
-
-				kidNode, err := pib.buildPageTreeNode(reader, kidRef, node, pageNum)
-				if err != nil {
-					continue // Skip problematic kids
-				}
-				node.Kids = append(node.Kids, kidNode)
-			}
-		}
-
-	} else if strings.Contains(content, "/Type /Page") {
-		node.Type = "Page"
-		node.PageNum = *pageNum
-
-		// Add to index
-		pib.index.PageOffsets[*pageNum] = objRef.Offset
-		pib.index.PageObjects[*pageNum] = objRef
-
-		*pageNum++
-	}
-
-	return node, nil
 }
 
 // extractPageResources extracts resource references for each page
@@ -429,7 +207,86 @@ func (pib *PageIndexBuilder) extractResourcesForPage(reader io.ReadSeeker, pageO
 	return resources, nil
 }
 
-// parseObjectAt parses an object at a specific location
+// buildPageTreeFromCatalog builds the page tree using the StreamParser
+func (pib *PageIndexBuilder) buildPageTreeFromCatalog() error {
+	// Get the catalog object (object 1 in most PDFs)
+	catalogObj, err := pib.streamParser.GetObject(1, 0)
+	if err != nil {
+		return fmt.Errorf("failed to get catalog object: %w", err)
+	}
+
+	// Extract Pages reference from catalog
+	pagesRegex := regexp.MustCompile(`/Pages\s+(\d+)\s+(\d+)\s+R`)
+	matches := pagesRegex.FindStringSubmatch(catalogObj.Content)
+	if len(matches) < 3 {
+		return fmt.Errorf("Pages reference not found in catalog")
+	}
+
+	pagesObjID, _ := strconv.Atoi(matches[1])
+	pagesGeneration, _ := strconv.Atoi(matches[2])
+
+	// Get the Pages object
+	pagesObj, err := pib.streamParser.GetObject(pagesObjID, pagesGeneration)
+	if err != nil {
+		return fmt.Errorf("failed to get Pages object %d %d: %w", pagesObjID, pagesGeneration, err)
+	}
+
+	// Parse the page tree
+	pageNum := 1
+	err = pib.parsePageTreeNode(pagesObj.Content, &pageNum, pagesObjID)
+	if err != nil {
+		return fmt.Errorf("failed to parse page tree: %w", err)
+	}
+
+	pib.index.TotalPages = pageNum - 1
+	return nil
+}
+
+// parsePageTreeNode recursively parses the page tree structure
+func (pib *PageIndexBuilder) parsePageTreeNode(content string, pageNum *int, objID int) error {
+	// Check if this is a Pages node or a Page node
+	// Be more specific: check for "/Type /Page" but not "/Type /Pages"
+	if strings.Contains(content, "/Type /Page") && !strings.Contains(content, "/Type /Pages") {
+		// This is a Page object - add to index
+		objRef := ObjectRef{
+			ObjectID:   objID,
+			Generation: 0,
+			Offset:     0, // Will be filled by XRef table
+		}
+
+		pib.index.PageObjects[*pageNum] = objRef
+		pib.index.PageOffsets[*pageNum] = 0 // Will be filled by XRef table
+		*pageNum++
+		return nil
+	}
+
+	// This is a Pages node - find Kids array
+	kidsRegex := regexp.MustCompile(`/Kids\s*\[\s*((?:\d+\s+\d+\s+R\s*)+)\]`)
+	matches := kidsRegex.FindStringSubmatch(content)
+	if len(matches) < 2 {
+		return fmt.Errorf("Kids array not found in Pages object")
+	}
+
+	// Parse kid references
+	kidRefs := parseObjectReferences(matches[1])
+	for _, kidRef := range kidRefs {
+		// Get the kid object
+		kidObj, err := pib.streamParser.GetObject(kidRef.ObjectID, kidRef.Generation)
+		if err != nil {
+			continue // Skip problematic kids
+		}
+
+		// Recursively parse the kid
+		err = pib.parsePageTreeNode(kidObj.Content, pageNum, kidRef.ObjectID)
+		if err != nil {
+			continue // Skip problematic kids
+		}
+	}
+
+	return nil
+}
+
+// parseObjectAt parses an object at a specific location using StreamParser
 func (pib *PageIndexBuilder) parseObjectAt(reader io.ReadSeeker, objRef ObjectRef) (string, error) {
 	// Check cache first
 	cacheKey := fmt.Sprintf("%d_%d", objRef.ObjectID, objRef.Generation)
@@ -437,58 +294,18 @@ func (pib *PageIndexBuilder) parseObjectAt(reader io.ReadSeeker, objRef ObjectRe
 		return cached, nil
 	}
 
-	// Seek to object
-	if objRef.Offset > 0 {
-		_, err := reader.Seek(objRef.Offset, io.SeekStart)
-		if err != nil {
-			return "", fmt.Errorf("failed to seek to object: %w", err)
-		}
+	// Use StreamParser to get the object
+	pdfObj, err := pib.streamParser.GetObject(objRef.ObjectID, objRef.Generation)
+	if err != nil {
+		return "", fmt.Errorf("failed to get object %d %d: %w", objRef.ObjectID, objRef.Generation, err)
 	}
 
-	// Read object content
-	buffer := make([]byte, 8192)
-	n, err := reader.Read(buffer)
-	if err != nil && err != io.EOF {
-		return "", fmt.Errorf("failed to read object: %w", err)
-	}
-
-	content := string(buffer[:n])
-
-	// Extract object content between obj and endobj
-	objRegex := regexp.MustCompile(fmt.Sprintf(`%d\s+%d\s+obj\s*(.*?)\s*endobj`, objRef.ObjectID, objRef.Generation))
-	matches := objRegex.FindStringSubmatch(content)
-	if len(matches) > 1 {
-		result := matches[1]
-		pib.objectCache[cacheKey] = result // Cache for future use
-		return result, nil
-	}
-
-	return "", fmt.Errorf("object %d %d not found", objRef.ObjectID, objRef.Generation)
+	// Cache for future use
+	pib.objectCache[cacheKey] = pdfObj.Content
+	return pdfObj.Content, nil
 }
 
 // Helper functions
-
-// parseObjectReferences parses object references from a string
-func parseObjectReferences(content string) []ObjectRef {
-	var refs []ObjectRef
-
-	refRegex := regexp.MustCompile(`(\d+)\s+(\d+)\s+R`)
-	matches := refRegex.FindAllStringSubmatch(content, -1)
-
-	for _, match := range matches {
-		if len(match) >= 3 {
-			objID, _ := strconv.Atoi(match[1])
-			generation, _ := strconv.Atoi(match[2])
-
-			refs = append(refs, ObjectRef{
-				ObjectID:   objID,
-				Generation: generation,
-			})
-		}
-	}
-
-	return refs
-}
 
 // compileIndexPatterns compiles regex patterns for efficient parsing
 func compileIndexPatterns() *IndexPatterns {

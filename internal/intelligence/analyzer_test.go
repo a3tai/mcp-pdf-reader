@@ -167,14 +167,35 @@ func TestAnalyze_EmptyElements(t *testing.T) {
 	analyzer := NewDocumentAnalyzer()
 	elements := createEmptyDocument()
 
-	_, err := analyzer.Analyze(elements)
-	if err == nil {
-		t.Error("Expected error for empty elements, got nil")
+	result, err := analyzer.Analyze(elements)
+	if err != nil {
+		t.Errorf("Expected no error for empty elements, got: %v", err)
 	}
 
-	expectedError := "no content elements provided for analysis"
-	if err.Error() != expectedError {
-		t.Errorf("Expected error '%s', got '%s'", expectedError, err.Error())
+	if result == nil {
+		t.Error("Expected valid analysis result, got nil")
+		return
+	}
+
+	// Check that we get meaningful analysis for empty content
+	if result.Type != "unknown" {
+		t.Errorf("Expected document type 'unknown', got '%s'", result.Type)
+	}
+
+	if len(result.Sections) != 0 {
+		t.Errorf("Expected 0 sections for empty content, got %d", len(result.Sections))
+	}
+
+	if result.Statistics.WordCount != 0 {
+		t.Errorf("Expected 0 word count for empty content, got %d", result.Statistics.WordCount)
+	}
+
+	if len(result.Quality.IssuesFound) == 0 {
+		t.Error("Expected quality issues to be reported for empty content")
+	}
+
+	if len(result.Suggestions) == 0 {
+		t.Error("Expected suggestions to be provided for empty content")
 	}
 }
 

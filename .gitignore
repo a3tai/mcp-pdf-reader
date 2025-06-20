@@ -8,7 +8,8 @@
 # Main binary (root directory only, preserves cmd/mcp-pdf-reader/ source)
 /mcp-pdf-reader
 /mcp-pdf-reader.exe
-
+/pdf_extract_forms
+/pdf_extract_forms.exe
 
 # Test binary, built with `go test -c`
 *.test

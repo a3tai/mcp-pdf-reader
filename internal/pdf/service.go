@@ -1,10 +1,14 @@
 package pdf
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/a3tai/mcp-pdf-reader/internal/pdf/pagerange"
 	"github.com/a3tai/mcp-pdf-reader/internal/pdf/security"
+	"github.com/a3tai/mcp-pdf-reader/internal/pdf/streaming"
 )
 
 // Service handles PDF file operations by orchestrating various PDF components
@@ -17,6 +21,8 @@ type Service struct {
 	search            *Search
 	extractionService *ExtractionService
 	pathValidator     *security.PathValidator
+	serverInfo        *PDFServerInfo
+	streamingEnabled  bool
 }
 
 // NewService creates a new PDF service with all components
@@ -26,7 +32,7 @@ func NewService(maxFileSize int64, configuredDirectory string) (*Service, error)
 		return nil, fmt.Errorf("failed to create path validator: %w", err)
 	}
 
-	return &Service{
+	service := &Service{
 		maxFileSize:       maxFileSize,
 		reader:            NewReader(maxFileSize),
 		validator:         NewValidator(maxFileSize),
@@ -35,38 +41,64 @@ func NewService(maxFileSize int64, configuredDirectory string) (*Service, error)
 		search:            NewSearch(maxFileSize),
 		extractionService: NewExtractionService(maxFileSize),
 		pathValidator:     pathValidator,
-	}, nil
+	}
+
+	// Initialize server info with self-reference
+	service.serverInfo = NewPDFServerInfo(service)
+	service.streamingEnabled = true
+
+	return service, nil
 }
 
 // PDFReadFile reads the content of a PDF file
 func (s *Service) PDFReadFile(req PDFReadFileRequest) (*PDFReadFileResult, error) {
-	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
 		return nil, fmt.Errorf("security validation failed: %w", err)
 	}
+
+	// Update request with normalized path
+	req.Path = normalizedPath
 	return s.reader.ReadFile(req)
 }
 
 // PDFAssetsFile extracts visual assets like images from a PDF file
 func (s *Service) PDFAssetsFile(req PDFAssetsFileRequest) (*PDFAssetsFileResult, error) {
-	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
 		return nil, fmt.Errorf("security validation failed: %w", err)
 	}
+
+	// Update request with normalized path
+	req.Path = normalizedPath
 	return s.assets.ExtractAssets(req)
 }
 
 // PDFValidateFile performs validation on a PDF file
 func (s *Service) PDFValidateFile(req PDFValidateFileRequest) (*PDFValidateFileResult, error) {
-	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
 		return nil, fmt.Errorf("security validation failed: %w", err)
 	}
+
+	// Update request with normalized path
+	req.Path = normalizedPath
 	return s.validator.ValidateFile(req)
 }
 
 // PDFStatsFile returns detailed statistics about a single PDF file
 func (s *Service) PDFStatsFile(req PDFStatsFileRequest) (*PDFStatsFileResult, error) {
-	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
 		return nil, fmt.Errorf("security validation failed: %w", err)
 	}
+
+	// Update request with normalized path
+	req.Path = normalizedPath
 	return s.stats.GetFileStats(req)
 }
 
@@ -75,6 +107,13 @@ func (s *Service) PDFSearchDirectory(req PDFSearchDirectoryRequest) (*PDFSearchD
 	// If no directory specified, use configured directory
 	if req.Directory == "" {
 		req.Directory = s.pathValidator.GetConfiguredDirectory()
+	} else {
+		// Normalize relative directory paths
+		normalizedDir, err := s.pathValidator.NormalizePath(req.Directory)
+		if err != nil {
+			return nil, fmt.Errorf("security validation failed: %w", err)
+		}
+		req.Directory = normalizedDir
 	}
 
 	// Validate directory is within configured bounds
@@ -87,6 +126,23 @@ func (s *Service) PDFSearchDirectory(req PDFSearchDirectoryRequest) (*PDFSearchD
 
 // PDFStatsDirectory returns statistics about PDF files in a directory
 func (s *Service) PDFStatsDirectory(req PDFStatsDirectoryRequest) (*PDFStatsDirectoryResult, error) {
+	// If no directory specified, use configured directory
+	if req.Directory == "" {
+		req.Directory = s.pathValidator.GetConfiguredDirectory()
+	} else {
+		// Normalize relative directory paths
+		normalizedDir, err := s.pathValidator.NormalizePath(req.Directory)
+		if err != nil {
+			return nil, fmt.Errorf("security validation failed: %w", err)
+		}
+		req.Directory = normalizedDir
+	}
+
+	// Validate directory is within configured bounds
+	if err := s.pathValidator.ValidateDirectory(req.Directory); err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
 	return s.stats.GetDirectoryStats(req)
 }
 
@@ -121,149 +177,26 @@ func (s *Service) GetSupportedImageFormats() []string {
 }
 
 // PDFServerInfo returns comprehensive server information and usage guidance
-func (s *Service) PDFServerInfo(req PDFServerInfoRequest, serverName, version,
+func (s *Service) PDFServerInfo(ctx context.Context, req PDFServerInfoRequest, serverName, version,
 	defaultDirectory string,
 ) (*PDFServerInfoResult, error) {
-	// Validate the default directory is within bounds
-	validatedDir := defaultDirectory
-	if err := s.pathValidator.ValidateDirectory(defaultDirectory); err != nil {
-		// Use the configured directory if validation fails
-		validatedDir = s.pathValidator.GetConfiguredDirectory()
-	}
-
-	// Get directory contents with a timeout to prevent hanging
-	// Limit to first 100 files for performance
-	directoryContents := []FileInfo{}
-
-	// Create a channel to receive results
-	resultChan := make(chan []FileInfo, 1)
-	errorChan := make(chan error, 1)
-
-	// Run directory search in a goroutine with timeout
-	go func() {
-		files, err := s.search.FindPDFsInDirectoryLimited(validatedDir, 100)
-		if err != nil {
-			errorChan <- err
-			return
-		}
-		resultChan <- files
-	}()
-
-	// Wait for result with timeout
-	select {
-	case files := <-resultChan:
-		directoryContents = files
-	case <-errorChan:
-		// Don't fail completely if directory scan fails, just return empty contents
-		directoryContents = []FileInfo{}
-	case <-time.After(5 * time.Second):
-		// Timeout after 5 seconds
-		directoryContents = []FileInfo{}
-	}
-
-	// Define available tools with detailed information
-	availableTools := []ToolInfo{
-		{
-			Name:        "pdf_read_file",
-			Description: "Read and extract text content from a PDF file",
-			Usage:       "Use this tool to extract readable text from PDF files. Best for text-based PDFs.",
-			Parameters:  "path (required): Full absolute path to the PDF file",
-		},
-		{
-			Name:        "pdf_assets_file",
-			Description: "Extract visual assets like images from a PDF file",
-			Usage: "Use this tool when a PDF contains scanned images or when pdf_read_file indicates " +
-				"'scanned_images' or 'mixed' content type. Extracts JPEG, PNG and other image formats.",
-			Parameters: "path (required): Full absolute path to the PDF file",
-		},
-		{
-			Name:        "pdf_validate_file",
-			Description: "Validate if a file is a readable PDF",
-			Usage:       "Use this tool to check if a file is a valid PDF before attempting to read it.",
-			Parameters:  "path (required): Full absolute path to the PDF file",
-		},
-		{
-			Name:        "pdf_stats_file",
-			Description: "Get detailed statistics about a PDF file",
-			Usage:       "Use this tool to get metadata, page count, file size, and document properties of a PDF.",
-			Parameters:  "path (required): Full absolute path to the PDF file",
-		},
-		{
-			Name:        "pdf_search_directory",
-			Description: "Search for PDF files in a directory with optional fuzzy search",
-			Usage: "Use this tool to find PDF files in the default directory or any specified " +
-				"directory. Supports fuzzy search by filename.",
-			Parameters: "directory (optional): Directory path to search (uses default if empty), " +
-				"query (optional): Search query for fuzzy matching",
-		},
-		{
-			Name:        "pdf_stats_directory",
-			Description: "Get statistics about PDF files in a directory",
-			Usage: "Use this tool to get an overview of all PDF files in a directory including " +
-				"total count, sizes, and file information.",
-			Parameters: "directory (optional): Directory path to analyze (uses default if empty)",
-		},
-	}
-
-	usageGuidance := `PDF MCP Server Usage Guide:
-
-1. START WITH DISCOVERY:
-   - Use 'pdf_search_directory' to find available PDF files
-   - Use 'pdf_stats_directory' to get an overview of the directory
-
-2. VALIDATE FILES:
-   - Use 'pdf_validate_file' to check if a file is readable before processing
-
-3. READ CONTENT:
-   - Use 'pdf_read_file' first to extract text content
-   - Check the 'content_type' field in the response:
-     * "text": PDF contains readable text
-     * "scanned_images": PDF contains only scanned images (no extractable text)
-     * "mixed": PDF contains both text and images
-     * "no_content": PDF appears empty or unreadable
-
-4. EXTRACT IMAGES WHEN NEEDED:
-   - Use 'pdf_assets_file' when:
-     * content_type is "scanned_images" (document is likely scanned)
-     * content_type is "mixed" and you need the images
-     * has_images is true and you want to extract visual content
-
-5. GET METADATA:
-   - Use 'pdf_stats_file' to get document properties, creation dates, author info, etc.
-
-IMPORTANT NOTES:
-- Always use absolute file paths
-- The server can handle files up to ` + fmt.Sprintf("%d", s.maxFileSize/(1024*1024)) + `MB
-- For scanned documents, pdf_assets_file will extract images but cannot perform OCR
-- Some PDFs may have images that cannot be extracted due to format limitations`
-
-	result := &PDFServerInfoResult{
-		ServerName:        serverName,
-		Version:           version,
-		DefaultDirectory:  validatedDir,
-		MaxFileSize:       s.maxFileSize,
-		AvailableTools:    availableTools,
-		DirectoryContents: directoryContents,
-		UsageGuidance:     usageGuidance,
-		SupportedFormats:  s.GetSupportedImageFormats(),
-	}
-
-	return result, nil
+	// Use optimized server info with context
+	return s.serverInfo.GetServerInfo(ctx, serverName, version, defaultDirectory)
 }
 
 // ExtractStructured performs structured content extraction with positioning and formatting
 func (s *Service) ExtractStructured(req PDFExtractStructuredRequest) (*PDFExtractResult, error) {
-	// Validate path is within configured directory
-	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
 		return nil, fmt.Errorf("security validation failed: %w", err)
 	}
 
 	// Convert to internal request format
 	extractReq := PDFExtractRequest{
-		Path:   req.Path,
+		Path:   normalizedPath,
 		Mode:   req.Mode,
 		Config: ExtractConfig(req.Config),
-		Query:  s.convertQuery(req.Query),
 	}
 
 	if extractReq.Mode == "" {
@@ -274,9 +207,16 @@ func (s *Service) ExtractStructured(req PDFExtractStructuredRequest) (*PDFExtrac
 }
 
 // ExtractTables performs table detection and extraction
+// ExtractTables performs table extraction
 func (s *Service) ExtractTables(req PDFExtractTablesRequest) (*PDFExtractResult, error) {
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
 	extractReq := PDFExtractRequest{
-		Path:   req.Path,
+		Path:   normalizedPath,
 		Mode:   "table",
 		Config: ExtractConfig(req.Config),
 	}
@@ -284,10 +224,16 @@ func (s *Service) ExtractTables(req PDFExtractTablesRequest) (*PDFExtractResult,
 	return s.extractionService.ExtractTables(extractReq)
 }
 
-// ExtractForms performs form field extraction
+// ExtractForms performs form extraction
 func (s *Service) ExtractForms(req PDFExtractRequest) (*PDFExtractResult, error) {
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
 	extractReq := PDFExtractRequest{
-		Path:   req.Path,
+		Path:   normalizedPath,
 		Mode:   "form",
 		Config: req.Config,
 	}
@@ -296,9 +242,16 @@ func (s *Service) ExtractForms(req PDFExtractRequest) (*PDFExtractResult, error)
 }
 
 // ExtractSemantic performs semantic content grouping
+// ExtractSemantic performs semantic extraction
 func (s *Service) ExtractSemantic(req PDFExtractSemanticRequest) (*PDFExtractResult, error) {
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
 	extractReq := PDFExtractRequest{
-		Path:   req.Path,
+		Path:   normalizedPath,
 		Mode:   "semantic",
 		Config: ExtractConfig(req.Config),
 	}
@@ -308,14 +261,15 @@ func (s *Service) ExtractSemantic(req PDFExtractSemanticRequest) (*PDFExtractRes
 
 // ExtractComplete performs comprehensive extraction of all content types
 func (s *Service) ExtractComplete(req PDFExtractCompleteRequest) (*PDFExtractResult, error) {
-	// Validate path is within configured directory
-	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
 		return nil, fmt.Errorf("security validation failed: %w", err)
 	}
 
 	// Convert to internal request format
 	extractReq := PDFExtractRequest{
-		Path:   req.Path,
+		Path:   normalizedPath,
 		Mode:   "complete",
 		Config: ExtractConfig(req.Config),
 	}
@@ -325,6 +279,14 @@ func (s *Service) ExtractComplete(req PDFExtractCompleteRequest) (*PDFExtractRes
 
 // QueryContent searches extracted content using the provided query
 func (s *Service) QueryContent(req PDFQueryContentRequest) (*PDFQueryResult, error) {
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
+	// Update request with normalized path
+	req.Path = normalizedPath
 	queryReq := PDFQueryRequest(req)
 
 	result, err := s.extractionService.QueryContent(queryReq)
@@ -344,8 +306,13 @@ func (s *Service) QueryContent(req PDFQueryContentRequest) (*PDFQueryResult, err
 
 // GetPageInfo returns detailed page information
 func (s *Service) GetPageInfo(req PDFGetPageInfoRequest) (*PDFPageInfoResult, error) {
-	path := req.Path
-	pages, err := s.extractionService.GetPageInfo(path)
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
+	pages, err := s.extractionService.GetPageInfo(normalizedPath)
 	if err != nil {
 		return nil, err
 	}
@@ -368,15 +335,20 @@ func (s *Service) GetPageInfo(req PDFGetPageInfoRequest) (*PDFPageInfoResult, er
 	}
 
 	return &PDFPageInfoResult{
-		FilePath: path,
+		FilePath: normalizedPath,
 		Pages:    mcpPages,
 	}, nil
 }
 
 // GetMetadata extracts comprehensive document metadata
 func (s *Service) GetMetadata(req PDFGetMetadataRequest) (*PDFMetadataResult, error) {
-	path := req.Path
-	metadata, err := s.extractionService.GetMetadata(path)
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
+	metadata, err := s.extractionService.GetMetadata(normalizedPath)
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +376,7 @@ func (s *Service) GetMetadata(req PDFGetMetadataRequest) (*PDFMetadataResult, er
 	}
 
 	return &PDFMetadataResult{
-		FilePath: path,
+		FilePath: normalizedPath,
 		Metadata: mcpMetadata,
 	}, nil
 }
@@ -434,4 +406,565 @@ func (s *Service) ValidateConfiguration() error {
 	}
 
 	return nil
+}
+
+// Streaming Processing Methods
+
+// StreamProcessFile processes a PDF file using streaming for large file support
+func (s *Service) StreamProcessFile(req PDFStreamProcessRequest) (*PDFStreamProcessResult, error) {
+	if !s.streamingEnabled {
+		return nil, fmt.Errorf("streaming processing is not enabled")
+	}
+
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
+	// Check if file exists and get info
+	fileInfo, err := os.Stat(normalizedPath)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("file does not exist: %s", normalizedPath)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cannot access file: %w", err)
+	}
+
+	// Open file for streaming
+	file, err := os.Open(normalizedPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// Configure streaming extractor
+	config := s.getStreamingConfig(req.Config)
+	config.ExtractText = req.ExtractText
+	config.ExtractImages = req.ExtractImages
+	config.ExtractForms = req.ExtractForms
+	config.PreserveFormat = req.PreserveFormat
+
+	extractor := streaming.NewStreamingExtractor(config)
+
+	// Process with or without progress reporting
+	ctx := context.Background()
+	var result *streaming.StreamingResult
+
+	if req.ProgressReport {
+		result, err = extractor.ExtractWithProgress(ctx, file, fileInfo.Size(),
+			func(progress streaming.ProcessingProgress) {
+				// Progress callback - could be extended to support callbacks
+			})
+	} else {
+		result, err = extractor.ExtractFromReader(ctx, file, fileInfo.Size())
+	}
+
+	if err != nil {
+		return &PDFStreamProcessResult{
+			FilePath: normalizedPath,
+			Status:   "error",
+			Error:    err.Error(),
+		}, nil
+	}
+
+	// Convert result to service format
+	return s.convertStreamingResult(normalizedPath, result), nil
+}
+
+// StreamProcessPages processes specific pages using streaming
+func (s *Service) StreamProcessPages(req PDFStreamPageRequest) (*PDFStreamPageResult, error) {
+	if !s.streamingEnabled {
+		return nil, fmt.Errorf("streaming processing is not enabled")
+	}
+
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
+	// Open file
+	file, err := os.Open(normalizedPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// Create streaming parser
+	config := s.getStreamingConfig(req.Config)
+	parserOpts := streaming.StreamOptions{
+		ChunkSizeMB:     int(config.ChunkSize / (1024 * 1024)),
+		MaxMemoryMB:     int(config.MaxMemory / (1024 * 1024)),
+		XRefCacheSize:   config.CacheSize,
+		ObjectCacheSize: config.CacheSize / 2,
+		GCTrigger:       0.8,
+		BufferPoolSize:  config.BufferPoolSize,
+	}
+
+	parser, err := streaming.NewStreamParser(file, parserOpts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stream parser: %w", err)
+	}
+	defer parser.Close()
+
+	// Create page streamer
+	pageConfig := streaming.PageStreamerConfig{
+		ExtractText:   req.ExtractText,
+		ExtractImages: req.ExtractImages,
+		ExtractForms:  req.ExtractForms,
+	}
+	streamer := streaming.NewPageStreamer(parser, pageConfig)
+
+	// Process pages
+	var processedPages []StreamPage
+	ctx := context.Background()
+
+	err = streamer.StreamPages(ctx, func(page *streaming.StreamPage) error {
+		streamPage := s.convertStreamPage(page)
+
+		// Filter by page range if specified
+		if req.StartPage > 0 && page.Number < req.StartPage {
+			return nil
+		}
+		if req.EndPage > 0 && page.Number > req.EndPage {
+			return nil
+		}
+
+		processedPages = append(processedPages, streamPage)
+		return nil
+	})
+	if err != nil {
+		return &PDFStreamPageResult{
+			FilePath: normalizedPath,
+			Status:   "error",
+			Error:    err.Error(),
+		}, nil
+	}
+
+	return &PDFStreamPageResult{
+		FilePath:    normalizedPath,
+		Pages:       processedPages,
+		TotalPages:  streamer.GetPageCount(),
+		ProcessedAt: time.Now().UnixMilli(),
+		Status:      "completed",
+	}, nil
+}
+
+// StreamExtractText extracts only text using streaming for memory efficiency
+func (s *Service) StreamExtractText(req PDFStreamTextRequest) (*PDFStreamTextResult, error) {
+	if !s.streamingEnabled {
+		return nil, fmt.Errorf("streaming processing is not enabled")
+	}
+
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
+	// Open file
+	file, err := os.Open(normalizedPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// Configure for text-only extraction
+	config := s.getStreamingConfig(req.Config)
+	config.ExtractText = true
+	config.ExtractImages = false
+	config.ExtractForms = false
+
+	extractor := streaming.NewStreamingExtractor(config)
+
+	var textLength int
+	var outputPath string
+
+	if req.OutputPath != "" {
+		// Stream to file
+		outputFile, err := os.Create(req.OutputPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create output file: %w", err)
+		}
+		defer outputFile.Close()
+
+		ctx := context.Background()
+		err = extractor.ExtractTextStream(ctx, file, outputFile)
+		if err != nil {
+			return &PDFStreamTextResult{
+				FilePath: normalizedPath,
+				Status:   "error",
+				Error:    err.Error(),
+			}, nil
+		}
+
+		// Get file size for text length
+		info, _ := outputFile.Stat()
+		textLength = int(info.Size())
+		outputPath = req.OutputPath
+	} else {
+		// Extract to memory
+		ctx := context.Background()
+		result, err := extractor.ExtractFromReader(ctx, file, 0)
+		if err != nil {
+			return &PDFStreamTextResult{
+				FilePath: normalizedPath,
+				Status:   "error",
+				Error:    err.Error(),
+			}, nil
+		}
+
+		textLength = len(result.Content.Text)
+	}
+
+	return &PDFStreamTextResult{
+		FilePath:    normalizedPath,
+		OutputPath:  outputPath,
+		TextLength:  textLength,
+		ProcessedAt: time.Now().UnixMilli(),
+		Status:      "completed",
+	}, nil
+}
+
+// Helper methods for streaming
+
+// getStreamingConfig converts service config to streaming config
+func (s *Service) getStreamingConfig(config *StreamingConfig) streaming.StreamingConfig {
+	if config == nil {
+		// Use defaults based on service limits
+		return streaming.StreamingConfig{
+			ChunkSize:      1024 * 1024,       // 1MB chunks
+			MaxMemory:      s.maxFileSize / 4, // Use 1/4 of max file size as memory limit
+			ExtractText:    true,
+			ExtractImages:  true,
+			ExtractForms:   true,
+			PreserveFormat: false,
+			EnableCaching:  true,
+			CacheSize:      1000,
+			BufferPoolSize: 10,
+		}
+	}
+
+	return streaming.StreamingConfig{
+		ChunkSize:      int64(config.ChunkSizeMB) * 1024 * 1024,
+		MaxMemory:      int64(config.MaxMemoryMB) * 1024 * 1024,
+		ExtractText:    true,
+		ExtractImages:  true,
+		ExtractForms:   true,
+		PreserveFormat: false,
+		EnableCaching:  config.EnableCaching,
+		CacheSize:      config.CacheSize,
+		BufferPoolSize: config.BufferPoolSize,
+	}
+}
+
+// convertStreamingResult converts streaming result to service format
+func (s *Service) convertStreamingResult(filePath string, result *streaming.StreamingResult) *PDFStreamProcessResult {
+	return &PDFStreamProcessResult{
+		FilePath: filePath,
+		Content: &StreamProcessedContent{
+			Text:   result.Content.Text,
+			Images: s.convertStreamImages(result.Content.Images),
+			Forms:  s.convertStreamForms(result.Content.Forms),
+			Pages:  s.convertStreamPages(result.Content.Pages),
+		},
+		Progress: &StreamProcessingProgress{
+			CurrentPage:  result.Progress.CurrentPage,
+			TextSize:     result.Progress.TextSize,
+			ImageCount:   result.Progress.ImageCount,
+			FormCount:    result.Progress.FormCount,
+			ObjectsFound: result.Progress.ObjectsFound,
+		},
+		MemoryStats: &StreamMemoryStats{
+			CurrentBytes:    result.MemoryStats.CurrentBytes,
+			MaxBytes:        result.MemoryStats.MaxBytes,
+			UsagePercent:    result.MemoryStats.UsagePercent,
+			XRefCacheSize:   result.MemoryStats.XRefCacheSize,
+			ObjectCacheSize: result.MemoryStats.ObjectCacheSize,
+		},
+		ProcessingStats: &StreamProcessingStats{
+			TotalChunks:     result.ProcessingStats.TotalChunks,
+			ProcessedChunks: result.ProcessingStats.ProcessedChunks,
+			TotalObjects:    result.ProcessingStats.TotalObjects,
+			ProcessingTime:  result.ProcessingStats.ProcessingTime,
+			BytesProcessed:  result.ProcessingStats.BytesProcessed,
+		},
+		Status: "completed",
+	}
+}
+
+// convertStreamPage converts streaming page to service format
+func (s *Service) convertStreamPage(page *streaming.StreamPage) StreamPage {
+	return StreamPage{
+		Number: page.Number,
+		Offset: page.Offset,
+		Length: page.Length,
+		Content: StreamPageContent{
+			Text:       page.Content.Text,
+			Images:     s.convertStreamPageImages(page.Content.Images),
+			Forms:      s.convertStreamPageForms(page.Content.Forms),
+			TextBlocks: s.convertStreamTextBlocks(page.Content.TextBlocks),
+		},
+		Metadata: StreamPageMetadata{
+			MediaBox:    Rectangle(page.Metadata.MediaBox),
+			Rotation:    page.Metadata.Rotation,
+			HasImages:   page.Metadata.HasImages,
+			HasForms:    page.Metadata.HasForms,
+			TextLength:  page.Metadata.TextLength,
+			ObjectCount: page.Metadata.Annotations,
+		},
+		ProcessedAt: page.ProcessedAt,
+		Status:      page.Status,
+		Error:       page.Error,
+	}
+}
+
+// Helper conversion methods
+func (s *Service) convertStreamImages(images []streaming.ImageInfo) []StreamImageInfo {
+	result := make([]StreamImageInfo, len(images))
+	for i, img := range images {
+		result[i] = StreamImageInfo{
+			ObjectNumber: img.ObjectNumber,
+			Offset:       img.Offset,
+			Length:       img.Length,
+			Width:        img.Width,
+			Height:       img.Height,
+			Format:       img.Format,
+		}
+	}
+	return result
+}
+
+func (s *Service) convertStreamForms(forms []streaming.FormInfo) []StreamFormInfo {
+	result := make([]StreamFormInfo, len(forms))
+	for i, form := range forms {
+		result[i] = StreamFormInfo{
+			ObjectNumber: form.ObjectNumber,
+			Offset:       form.Offset,
+			FieldType:    form.FieldType,
+			FieldName:    form.FieldName,
+			FieldValue:   form.FieldValue,
+		}
+	}
+	return result
+}
+
+func (s *Service) convertStreamPages(pages []streaming.PageInfo) []StreamPageInfo {
+	result := make([]StreamPageInfo, len(pages))
+	for i, page := range pages {
+		result[i] = StreamPageInfo{
+			Number:   page.Number,
+			Offset:   page.Offset,
+			Length:   page.Length,
+			MediaBox: Rectangle(page.MediaBox),
+		}
+	}
+	return result
+}
+
+func (s *Service) convertStreamPageImages(images []streaming.ImageInfo) []StreamImageInfo {
+	result := make([]StreamImageInfo, len(images))
+	for i, img := range images {
+		result[i] = StreamImageInfo{
+			ObjectNumber: img.ObjectNumber,
+			Offset:       img.Offset,
+			Length:       img.Length,
+			Width:        img.Width,
+			Height:       img.Height,
+			Format:       img.Format,
+		}
+	}
+	return result
+}
+
+func (s *Service) convertStreamPageForms(forms []streaming.FormInfo) []StreamFormInfo {
+	result := make([]StreamFormInfo, len(forms))
+	for i, form := range forms {
+		result[i] = StreamFormInfo{
+			ObjectNumber: form.ObjectNumber,
+			Offset:       form.Offset,
+			FieldType:    form.FieldType,
+			FieldName:    form.FieldName,
+			FieldValue:   form.FieldValue,
+		}
+	}
+	return result
+}
+
+func (s *Service) convertStreamTextBlocks(blocks []streaming.TextBlock) []StreamTextBlock {
+	result := make([]StreamTextBlock, len(blocks))
+	for i, block := range blocks {
+		result[i] = StreamTextBlock{
+			Text:     block.Text,
+			X:        block.X,
+			Y:        block.Y,
+			Width:    block.Width,
+			Height:   block.Height,
+			FontSize: block.FontSize,
+			FontName: block.FontName,
+		}
+	}
+	return result
+}
+
+// EnableStreaming enables or disables streaming functionality
+func (s *Service) EnableStreaming(enabled bool) {
+	s.streamingEnabled = enabled
+}
+
+// IsStreamingEnabled returns whether streaming is enabled
+func (s *Service) IsStreamingEnabled() bool {
+	return s.streamingEnabled
+}
+
+// Page Range Extraction Methods
+
+// ExtractPageRange extracts content from specific page ranges efficiently
+func (s *Service) ExtractPageRange(req PDFExtractPageRangeRequest) (*PDFExtractPageRangeResult, error) {
+	// Normalize relative paths
+	normalizedPath, err := s.pathValidator.NormalizePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
+	// Create page range extractor
+	config := pagerange.ExtractorConfig{
+		MaxCacheSize:    50 * 1024 * 1024, // 50MB cache
+		EnableCaching:   true,
+		PreloadObjects:  true,
+		ParallelEnabled: false,
+	}
+	extractor := pagerange.NewPageRangeExtractor(config)
+
+	// Convert service ranges to pagerange ranges
+	ranges := make([]pagerange.PageRange, len(req.Ranges))
+	for i, r := range req.Ranges {
+		ranges[i] = pagerange.PageRange{
+			Start: r.Start,
+			End:   r.End,
+		}
+	}
+
+	// Configure extraction options
+	options := pagerange.ExtractOptions{
+		ContentTypes:       req.ContentTypes,
+		PreserveFormatting: req.PreserveFormatting,
+		IncludeMetadata:    req.IncludeMetadata,
+		ExtractImages:      req.ExtractImages,
+		ExtractForms:       req.ExtractForms,
+		OutputFormat:       req.OutputFormat,
+	}
+
+	// Extract content
+	result, err := extractor.ExtractFromFile(normalizedPath, ranges, options)
+	if err != nil {
+		return &PDFExtractPageRangeResult{
+			FilePath: normalizedPath,
+			Status:   "error",
+			Error:    err.Error(),
+		}, nil
+	}
+
+	// Convert result to service format
+	return s.convertPageRangeResult(normalizedPath, result), nil
+}
+
+// Helper methods for page range extraction
+
+func (s *Service) convertPageRangeResult(filePath string, result *pagerange.ExtractedContent) *PDFExtractPageRangeResult {
+	// Convert pages
+	pages := make(map[int]ExtractedPageContent)
+	for pageNum, pageContent := range result.Pages {
+		pages[pageNum] = ExtractedPageContent{
+			PageNumber: pageContent.PageNumber,
+			Text:       pageContent.Text,
+			Images:     s.convertImageReferences(pageContent.Images),
+			Forms:      s.convertFormFields(pageContent.Forms),
+			Metadata: ExtractedPageMetadata{
+				MediaBox:      Rectangle(pageContent.Metadata.MediaBox),
+				CropBox:       Rectangle(pageContent.Metadata.CropBox),
+				Rotation:      pageContent.Metadata.Rotation,
+				UserUnit:      pageContent.Metadata.UserUnit,
+				ResourceCount: pageContent.Metadata.ResourceCount,
+				ObjectCount:   pageContent.Metadata.ObjectCount,
+			},
+			TextBlocks: s.convertTextBlocks(pageContent.TextBlocks),
+		}
+	}
+
+	// Convert ranges
+	ranges := make([]PageRangeSpec, len(result.Ranges))
+	for i, r := range result.Ranges {
+		ranges[i] = PageRangeSpec{
+			Start: r.Start,
+			End:   r.End,
+		}
+	}
+
+	return &PDFExtractPageRangeResult{
+		FilePath:    filePath,
+		Pages:       pages,
+		TotalPages:  result.TotalPages,
+		Ranges:      ranges,
+		ProcessedAt: time.Now().UnixMilli(),
+		Metadata: ExtractionResultMetadata{
+			ProcessingTime: result.Metadata.ProcessingTime,
+			CacheHits:      result.Metadata.CacheHits,
+			CacheMisses:    result.Metadata.CacheMisses,
+			ObjectsParsed:  result.Metadata.ObjectsParsed,
+			BytesRead:      result.Metadata.BytesRead,
+			MemoryUsage:    result.Metadata.MemoryUsage,
+		},
+		Status: "completed",
+	}
+}
+
+func (s *Service) convertImageReferences(images []pagerange.ImageReference) []ExtractedImageReference {
+	result := make([]ExtractedImageReference, len(images))
+	for i, img := range images {
+		result[i] = ExtractedImageReference{
+			ObjectID:   img.ObjectID,
+			X:          img.X,
+			Y:          img.Y,
+			Width:      img.Width,
+			Height:     img.Height,
+			Format:     img.Format,
+			ColorSpace: img.ColorSpace,
+		}
+	}
+	return result
+}
+
+func (s *Service) convertFormFields(forms []pagerange.FormField) []ExtractedFormField {
+	result := make([]ExtractedFormField, len(forms))
+	for i, form := range forms {
+		result[i] = ExtractedFormField{
+			FieldType:  form.FieldType,
+			FieldName:  form.FieldName,
+			FieldValue: form.FieldValue,
+			X:          form.X,
+			Y:          form.Y,
+			Width:      form.Width,
+			Height:     form.Height,
+		}
+	}
+	return result
+}
+
+func (s *Service) convertTextBlocks(blocks []pagerange.FormattedTextBlock) []ExtractedTextBlock {
+	result := make([]ExtractedTextBlock, len(blocks))
+	for i, block := range blocks {
+		result[i] = ExtractedTextBlock{
+			Text:     block.Text,
+			X:        block.X,
+			Y:        block.Y,
+			Width:    block.Width,
+			Height:   block.Height,
+			FontName: block.FontName,
+			FontSize: block.FontSize,
+			Color:    block.Color,
+		}
+	}
+	return result
 }

@@ -1,0 +1,248 @@
+# Task ID: 32
+# Title: Clean Up Development Cruft and Technical Debt
+# Status: pending
+# Dependencies: 27, 28, 29, 30, 31
+# Priority: medium
+# Description: Remove accumulated technical debt from PDF tool development including unused code, dead imports, temporary files, debug code, commented-out sections, and consolidate duplicate functionality to improve code organization and maintainability.
+# Details:
+Perform a comprehensive cleanup of the PDF extraction codebase to remove technical debt and improve code quality:
+
+```go
+// tools/cleanup/analyzer.go
+package cleanup
+
+import (
+    "go/ast"
+    "go/parser"
+    "go/token"
+    "path/filepath"
+    "strings"
+)
+
+type CodeAnalyzer struct {
+    deadCode      map[string][]Finding
+    unusedImports map[string][]string
+    debugCode     map[string][]CodeBlock
+    duplicates    map[string][]DuplicateFunc
+}
+
+type Finding struct {
+    File     string
+    Line     int
+    Type     string
+    Message  string
+}
+
+func (ca *CodeAnalyzer) AnalyzeProject(rootPath string) (*CleanupReport, error) {
+    // 1. Scan for unused imports
+    ca.findUnusedImports(rootPath)
+    
+    // 2. Detect dead code
+    ca.findDeadCode(rootPath)
+    
+    // 3. Find debug/temporary code
+    ca.findDebugCode(rootPath)
+    
+    // 4. Identify duplicate functionality
+    ca.findDuplicates(rootPath)
+    
+    return ca.generateReport()
+}
+
+// scripts/cleanup.sh
+#!/bin/bash
+# Automated cleanup script
+
+echo "Starting PDF tools cleanup..."
+
+# Remove temporary files
+find . -name "*.tmp" -o -name "*.log" -o -name "debug_*" | xargs rm -f
+
+# Clean up test artifacts
+find . -path "*/testdata/output/*" -delete
+
+# Remove commented code blocks
+grep -r "^[[:space:]]*//.*TODO.*remove" . --include="*.go" | cut -d: -f1 | sort -u
+
+// internal/cleanup/refactor.go
+type Refactorer struct {
+    ast       *ast.Package
+    fileSet   *token.FileSet
+    changes   []Change
+}
+
+func (r *Refactorer) ConsolidateDuplicates() error {
+    // Identify common patterns across extractors
+    patterns := []string{
+        "error handling boilerplate",
+        "PDF object parsing",
+        "coordinate transformation",
+        "text normalization",
+    }
+    
+    for _, pattern := range patterns {
+        duplicates := r.findPattern(pattern)
+        if len(duplicates) > 1 {
+            r.extractToShared(pattern, duplicates)
+        }
+    }
+    
+    return r.applyChanges()
+}
+
+// Cleanup targets by priority:
+// 1. Remove experimental code that didn't make it to production
+//    - internal/experimental/* (if exists)
+//    - Features marked with "EXPERIMENTAL" comments
+//    - Unused extraction strategies
+
+// 2. Clean up debug code
+//    - fmt.Printf/Println statements (replace with proper logging)
+//    - Debug flags and conditional compilation
+//    - Temporary debugging utilities
+
+// 3. Remove dead imports
+//    - Run goimports on all files
+//    - Remove vendor dependencies no longer used
+//    - Clean up replace directives in go.mod
+
+// 4. Consolidate duplicate functionality
+//    - Merge similar error handling patterns
+//    - Unify coordinate transformation logic
+//    - Consolidate PDF object parsing utilities
+
+// 5. Remove commented-out code
+//    - Old implementations kept "just in case"
+//    - Alternative approaches that were rejected
+//    - TODO comments older than 3 months
+
+// 6. Organize code structure
+//    - Move misplaced files to correct packages
+//    - Split large files (>500 lines) into logical units
+//    - Ensure consistent package naming
+
+// Example consolidation - Error handling:
+// Before (duplicated across multiple files):
+/*
+if err != nil {
+    log.Printf("Failed to parse PDF: %v", err)
+    return nil, fmt.Errorf("pdf parsing failed: %w", err)
+}
+*/
+
+// After (consolidated):
+// internal/common/errors.go
+func HandleParseError(operation string, err error) error {
+    if err == nil {
+        return nil
+    }
+    log.Printf("Failed to %s: %v", operation, err)
+    return fmt.Errorf("%s failed: %w", operation, err)
+}
+
+// Cleanup checklist:
+// [ ] Run go mod tidy to clean dependencies
+// [ ] Execute gofmt -s -w . for consistent formatting
+// [ ] Run staticcheck to find unused code
+// [ ] Use deadcode tool to identify unreachable functions
+// [ ] Review and remove old feature flags
+// [ ] Consolidate test utilities into shared package
+// [ ] Remove or properly document experimental APIs
+// [ ] Clean up outdated documentation
+// [ ] Remove development scripts no longer needed
+// [ ] Archive old benchmark results
+
+# Test Strategy:
+Comprehensive testing strategy to ensure cleanup doesn't break functionality:
+
+1. **Pre-Cleanup Baseline**:
+   - Run full test suite and record coverage percentage
+   - Generate benchmark results for all tools
+   - Create API compatibility report
+   - Document current binary sizes
+
+2. **Static Analysis Verification**:
+   - Run `go vet` to ensure no new issues introduced
+   - Execute `golint` and verify no regressions
+   - Use `ineffassign` to check for unused assignments
+   - Run `gosec` for security issues
+
+3. **Dead Code Detection**:
+   - Use `deadcode` tool to identify unused functions
+   - Run `unused` to find unused types, constants, variables
+   - Verify no public APIs were accidentally removed
+   - Check for orphaned test files
+
+4. **Import Cleanup Validation**:
+   - Run `goimports -l .` and verify no errors
+   - Check `go mod tidy` completes successfully
+   - Ensure no circular dependencies introduced
+   - Verify vendor directory is properly updated
+
+5. **Functionality Preservation**:
+   - Run complete test suite after each major cleanup phase
+   - Compare test coverage (should not decrease)
+   - Execute integration tests with real PDFs
+   - Verify all command-line tools still function
+
+6. **Performance Validation**:
+   - Re-run benchmarks and compare with baseline
+   - Ensure no performance regressions
+   - Check memory usage hasn't increased
+   - Verify binary sizes are reduced or stable
+
+7. **Code Quality Metrics**:
+   - Measure cyclomatic complexity reduction
+   - Check for improved code duplication metrics
+   - Verify consistent code style with `gofmt -d .`
+   - Ensure all files pass `go fmt` checks
+
+8. **Manual Review Checklist**:
+   - Verify no production code accidentally removed
+   - Check that all TODO/FIXME comments are addressed or documented
+   - Ensure experimental features are properly removed or promoted
+   - Validate that debug code is completely eliminated
+
+9. **Regression Testing**:
+   - Test with problematic PDFs from previous bug reports
+   - Verify form extraction still works (Task 27 fixes)
+   - Confirm MediaBox parsing remains functional (Task 28 fixes)
+   - Test all extraction modes for consistency
+
+10. **Documentation Updates**:
+    - Update README with any removed features
+    - Clean up outdated examples
+    - Verify all code comments are still accurate
+    - Update API documentation if interfaces changed
+
+# Subtasks:
+## 1. Implement Code Analysis Tool for Dead Code Detection [pending]
+### Dependencies: None
+### Description: Create an automated code analyzer that scans the entire PDF tool codebase to identify unused functions, variables, types, and unreachable code blocks using AST parsing and static analysis
+### Details:
+Build the CodeAnalyzer struct with methods to parse Go files using go/ast and go/parser packages. Implement findDeadCode() to traverse the AST and identify unused declarations, findUnusedImports() to detect imports not referenced in code, and findDebugCode() to locate fmt.Printf/Println statements and debug flags. Store findings in structured format for reporting.
+
+## 2. Remove Debug Code and Temporary Files [pending]
+### Dependencies: 32.1
+### Description: Clean up all debugging artifacts including print statements, temporary files, debug flags, experimental code paths, and convert necessary debug output to proper structured logging
+### Details:
+Use the analyzer output to locate and remove fmt.Printf/Println statements, replacing critical ones with proper log statements. Delete files matching patterns like *.tmp, *.log, debug_*, and clean test output directories. Remove code blocks marked with EXPERIMENTAL comments and unused feature flags. Implement the cleanup.sh script to automate file removal.
+
+## 3. Clean Up Imports and Dependencies [pending]
+### Dependencies: 32.1
+### Description: Remove all unused imports from Go files, clean up go.mod dependencies, remove vendor files no longer needed, and ensure all imports are properly organized
+### Details:
+Run goimports on all Go files to remove unused imports and organize import blocks. Execute 'go mod tidy' to clean up module dependencies. Review and remove any replace directives in go.mod that are no longer needed. Use the analyzer's unusedImports map to verify all imports are actually used.
+
+## 4. Consolidate Duplicate Functionality [pending]
+### Dependencies: 32.1, 32.2, 32.3
+### Description: Identify and merge duplicate code patterns across the codebase, creating shared utilities for common operations like error handling, coordinate transformations, and PDF object parsing
+### Details:
+Implement the Refactorer to identify duplicate patterns using AST analysis. Create internal/common package with shared utilities: errors.go for unified error handling (HandleParseError), transforms.go for coordinate operations, and parsing.go for PDF object utilities. Update all occurrences to use the consolidated functions. Focus on patterns identified in the analyzer's duplicates map.
+
+## 5. Reorganize Code Structure and Documentation [pending]
+### Dependencies: 32.4
+### Description: Restructure the codebase for better organization by splitting large files, moving misplaced code to appropriate packages, removing outdated comments and documentation, and ensuring consistent naming conventions
+### Details:
+Split any files over 500 lines into logical units. Move files to correct packages based on functionality. Remove commented-out code blocks and TODO comments older than 3 months. Update package documentation to reflect current implementation. Ensure consistent naming across packages. Archive old benchmark results and remove development scripts no longer needed.
+

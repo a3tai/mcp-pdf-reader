@@ -1,6 +1,6 @@
 # Task ID: 15
 # Title: Design and Implement Custom PDF Parser from Scratch
-# Status: pending
+# Status: done
 # Dependencies: 2, 12, 13, 14
 # Priority: low
 # Description: Build a complete PDF parser from scratch following PDF 1.4/1.7 specifications, providing full control over form extraction and document parsing without relying on external libraries

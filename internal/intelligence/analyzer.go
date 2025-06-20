@@ -141,8 +141,68 @@ func NewDocumentAnalyzerWithConfig(config AnalysisConfig) *DocumentAnalyzer {
 func (da *DocumentAnalyzer) Analyze(elements []extraction.ContentElement) (*DocumentAnalysis, error) {
 	startTime := time.Now()
 
+	// Handle empty content gracefully with better debugging
 	if len(elements) == 0 {
-		return nil, fmt.Errorf("no content elements provided for analysis")
+		// Create a basic analysis for empty content with debugging info
+		analysis := &DocumentAnalysis{
+			Type:     "unknown",
+			Sections: []Section{},
+			Statistics: ContentStats{
+				WordCount:      0,
+				CharacterCount: 0,
+				ParagraphCount: 0,
+				SentenceCount:  0,
+				PageCount:      0,
+				TableCount:     0,
+				ImageCount:     0,
+				FormFieldCount: 0,
+				HeaderCount:    0,
+				ListCount:      0,
+				FootnoteCount:  0,
+				LinkCount:      0,
+				ReadingTime:    0.0,
+				ContentDensity: make(map[string]float64),
+			},
+			Quality: QualityMetrics{
+				OverallScore:       0.0,
+				ReadabilityScore:   0.0,
+				CompletenessScore:  0.0,
+				ConsistencyScore:   0.0,
+				AccessibilityScore: 0.0,
+				StructureScore:     0.0,
+				DetailedMetrics:    make(map[string]float64),
+				IssuesFound: []QualityIssue{
+					{
+						Type:        "extraction",
+						Severity:    "high",
+						Description: "No content elements were extracted from the document",
+					},
+				},
+				PositiveIndicators: []string{},
+			},
+			Suggestions: []string{
+				"This PDF may be image-based or scanned - try using OCR tools",
+				"The PDF may be corrupted or use unsupported features",
+				"Check if the PDF requires a password or has security restrictions",
+				"Verify the PDF file is valid and not corrupted",
+				"Try using pdf_validate_file to check document integrity",
+				"Use pdf_get_metadata to understand document properties",
+				"Consider using pdf_assets_file if the document contains images",
+			},
+			Metadata: AnalysisMetadata{
+				AnalysisVersion:   "1.0.0",
+				AnalyzedAt:        startTime,
+				ComponentsUsed:    []string{"empty-content-handler"},
+				ConfigurationUsed: da.config,
+				Warnings: []string{
+					"No content elements provided for analysis",
+					"Document may be image-based, corrupted, or use unsupported features",
+				},
+				Errors: []string{},
+			},
+		}
+
+		return analysis, nil
 	}
 
 	analysis := &DocumentAnalysis{

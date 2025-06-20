@@ -1,0 +1,349 @@
+# Task ID: 20
+# Title: Optimize pdf_server_info Tool Performance
+# Status: done
+# Dependencies: 1
+# Priority: high
+# Description: Enhance the pdf_server_info tool performance by implementing lazy directory scanning, caching directory contents to avoid repeated filesystem operations, and removing the 5-second timeout that causes unnecessary delays.
+# Details:
+Implement comprehensive performance optimizations for the pdf_server_info tool:
+
+```go
+// internal/tools/pdf_server_info.go
+package tools
+
+import (
+    "sync"
+    "time"
+    "path/filepath"
+    "os"
+)
+
+type PDFServerInfo struct {
+    cache         *DirectoryCache
+    lazyScanner   *LazyDirectoryScanner
+    mu            sync.RWMutex
+}
+
+// Directory cache with TTL
+type DirectoryCache struct {
+    entries map[string]*CacheEntry
+    ttl     time.Duration
+    mu      sync.RWMutex
+}
+
+type CacheEntry struct {
+    files      []PDFFileInfo
+    lastUpdate time.Time
+    scanning   bool
+    scanMu     sync.Mutex
+}
+
+// Lazy directory scanner
+type LazyDirectoryScanner struct {
+    maxDepth    int
+    fileLimit   int
+    timeLimit   time.Duration
+}
+
+func (p *PDFServerInfo) GetInfo(ctx context.Context, path string) (*ServerInfo, error) {
+    // Remove hardcoded 5-second timeout
+    // Use context timeout instead
+    
+    // Check cache first
+    if cached := p.cache.Get(path); cached != nil {
+        return &ServerInfo{
+            PDFFiles: cached.files,
+            FromCache: true,
+            CacheAge: time.Since(cached.lastUpdate),
+        }, nil
+    }
+    
+    // Implement lazy scanning
+    scanner := p.lazyScanner
+    results := make(chan PDFFileInfo, 100)
+    errChan := make(chan error, 1)
+    
+    go func() {
+        defer close(results)
+        if err := scanner.ScanDirectory(ctx, path, results); err != nil {
+            errChan <- err
+        }
+    }()
+    
+    // Collect results with streaming
+    var files []PDFFileInfo
+    for file := range results {
+        files = append(files, file)
+    }
+    
+    // Update cache
+    p.cache.Set(path, files)
+    
+    return &ServerInfo{PDFFiles: files}, nil
+}
+
+// Lazy scanning implementation
+func (s *LazyDirectoryScanner) ScanDirectory(ctx context.Context, root string, results chan<- PDFFileInfo) error {
+    visited := make(map[string]bool)
+    fileCount := 0
+    startTime := time.Now()
+    
+    return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+        // Check context cancellation
+        select {
+        case <-ctx.Done():
+            return ctx.Err()
+        default:
+        }
+        
+        // Skip if we've hit limits
+        if s.fileLimit > 0 && fileCount >= s.fileLimit {
+            return filepath.SkipDir
+        }
+        
+        if s.timeLimit > 0 && time.Since(startTime) > s.timeLimit {
+            return filepath.SkipDir
+        }
+        
+        // Skip symlinks to avoid loops
+        if info.Mode()&os.ModeSymlink != 0 {
+            return nil
+        }
+        
+        // Check depth limit
+        depth := strings.Count(strings.TrimPrefix(path, root), string(os.PathSeparator))
+        if s.maxDepth > 0 && depth > s.maxDepth {
+            return filepath.SkipDir
+        }
+        
+        // Process PDF files
+        if strings.HasSuffix(strings.ToLower(path), ".pdf") {
+            fileCount++
+            results <- PDFFileInfo{
+                Path: path,
+                Size: info.Size(),
+                ModTime: info.ModTime(),
+            }
+        }
+        
+        return nil
+    })
+}
+
+// Cache implementation with TTL
+func (c *DirectoryCache) Get(path string) *CacheEntry {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
+    
+    entry, exists := c.entries[path]
+    if !exists {
+        return nil
+    }
+    
+    // Check if cache is still valid
+    if time.Since(entry.lastUpdate) > c.ttl {
+        // Trigger background refresh
+        go c.refreshEntry(path)
+        // Return stale data for now
+    }
+    
+    return entry
+}
+
+func (c *DirectoryCache) Set(path string, files []PDFFileInfo) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    
+    c.entries[path] = &CacheEntry{
+        files:      files,
+        lastUpdate: time.Now(),
+    }
+}
+
+// Background cache refresh
+func (c *DirectoryCache) refreshEntry(path string) {
+    entry := c.entries[path]
+    if entry == nil {
+        return
+    }
+    
+    // Prevent concurrent refreshes
+    if !entry.scanMu.TryLock() {
+        return
+    }
+    defer entry.scanMu.Unlock()
+    
+    // Rescan directory
+    scanner := &LazyDirectoryScanner{
+        maxDepth:  3,
+        fileLimit: 1000,
+        timeLimit: 5 * time.Second,
+    }
+    
+    results := make(chan PDFFileInfo, 100)
+    go scanner.ScanDirectory(context.Background(), path, results)
+    
+    var files []PDFFileInfo
+    for file := range results {
+        files = append(files, file)
+    }
+    
+    c.Set(path, files)
+}
+
+// Configuration for performance tuning
+type PerformanceConfig struct {
+    CacheTTL           time.Duration `json:"cache_ttl"`
+    MaxScanDepth       int          `json:"max_scan_depth"`
+    MaxFilesPerScan    int          `json:"max_files_per_scan"`
+    ScanTimeLimit      time.Duration `json:"scan_time_limit"`
+    EnableBackgroundRefresh bool     `json:"enable_background_refresh"`
+}
+
+// Initialize with config
+func NewPDFServerInfo(config PerformanceConfig) *PDFServerInfo {
+    return &PDFServerInfo{
+        cache: &DirectoryCache{
+            entries: make(map[string]*CacheEntry),
+            ttl:     config.CacheTTL,
+        },
+        lazyScanner: &LazyDirectoryScanner{
+            maxDepth:  config.MaxScanDepth,
+            fileLimit: config.MaxFilesPerScan,
+            timeLimit: config.ScanTimeLimit,
+        },
+    }
+}
+```
+
+Additional optimizations:
+
+```go
+// internal/tools/metrics.go
+type PerformanceMetrics struct {
+    CacheHits      int64
+    CacheMisses    int64
+    ScanDuration   time.Duration
+    FilesScanned   int64
+    DirectoriesScanned int64
+}
+
+// Add metrics collection
+func (p *PDFServerInfo) GetInfoWithMetrics(ctx context.Context, path string) (*ServerInfo, *PerformanceMetrics, error) {
+    metrics := &PerformanceMetrics{}
+    start := time.Now()
+    
+    // Check cache
+    if cached := p.cache.Get(path); cached != nil {
+        atomic.AddInt64(&metrics.CacheHits, 1)
+        return &ServerInfo{
+            PDFFiles: cached.files,
+            FromCache: true,
+        }, metrics, nil
+    }
+    
+    atomic.AddInt64(&metrics.CacheMisses, 1)
+    
+    // Perform scan
+    info, err := p.GetInfo(ctx, path)
+    metrics.ScanDuration = time.Since(start)
+    
+    return info, metrics, err
+}
+
+// Implement directory watching for cache invalidation
+type DirectoryWatcher struct {
+    watcher *fsnotify.Watcher
+    cache   *DirectoryCache
+}
+
+func (d *DirectoryWatcher) Watch(path string) error {
+    return d.watcher.Add(path)
+}
+
+func (d *DirectoryWatcher) handleEvents() {
+    for {
+        select {
+        case event := <-d.watcher.Events:
+            if event.Op&(fsnotify.Create|fsnotify.Remove|fsnotify.Rename) != 0 {
+                // Invalidate cache for parent directory
+                dir := filepath.Dir(event.Name)
+                d.cache.Invalidate(dir)
+            }
+        case err := <-d.watcher.Errors:
+            log.Printf("Watcher error: %v", err)
+        }
+    }
+}
+```
+
+# Test Strategy:
+Comprehensive testing strategy for performance optimizations:
+
+1. **Performance benchmarks**:
+   - Create benchmark tests comparing old vs new implementation
+   - Test with directories containing 10, 100, 1000, 10000 PDF files
+   - Measure memory usage and CPU utilization
+   - Verify removal of 5-second timeout delay
+
+2. **Cache functionality tests**:
+   - Test cache hit/miss scenarios
+   - Verify TTL expiration and refresh logic
+   - Test concurrent access to cache
+   - Verify cache invalidation on file system changes
+
+3. **Lazy scanning tests**:
+   - Test scan depth limiting
+   - Verify file count limits are respected
+   - Test time-based scan termination
+   - Verify context cancellation handling
+
+4. **Integration tests**:
+   - Test with real directory structures
+   - Verify symlink handling to prevent infinite loops
+   - Test with directories on different file systems (local, network)
+   - Measure actual performance improvements
+
+5. **Stress tests**:
+   - Test with very large directory trees
+   - Concurrent requests for same/different directories
+   - Memory leak detection with repeated operations
+   - Verify graceful degradation under load
+
+6. **Configuration tests**:
+   - Test different cache TTL values
+   - Verify configurable scan limits
+   - Test background refresh enable/disable
+   - Validate metrics collection accuracy
+
+# Subtasks:
+## 1. Remove Hardcoded Timeout and Implement Context-Based Cancellation [done]
+### Dependencies: None
+### Description: Replace the hardcoded 5-second timeout in the pdf_server_info tool with proper context-based cancellation to allow flexible timeout configuration and immediate response to cancellation requests
+### Details:
+Modify the GetInfo method to use context.WithTimeout or context.WithDeadline instead of hardcoded timeouts. Update all blocking operations to check context.Done() channel. Ensure proper cleanup when context is cancelled. Update the ScanDirectory method to properly propagate context cancellation throughout the file walking process.
+
+## 2. Implement Directory Cache with TTL and Background Refresh [done]
+### Dependencies: None
+### Description: Create a thread-safe caching mechanism for directory contents with configurable TTL and automatic background refresh to avoid repeated filesystem operations
+### Details:
+Implement the DirectoryCache struct with RWMutex for thread safety. Create Get and Set methods with proper locking. Implement TTL checking logic that returns stale data while triggering background refresh. Add the refreshEntry method that prevents concurrent refreshes using TryLock. Ensure cache entries include lastUpdate timestamp and scanning status.
+
+## 3. Create Lazy Directory Scanner with Configurable Limits [done]
+### Dependencies: 20.1
+### Description: Implement a lazy directory scanner that supports depth limits, file count limits, and time-based scanning limits to prevent excessive resource usage on large directory trees
+### Details:
+Implement the LazyDirectoryScanner struct with configurable maxDepth, fileLimit, and timeLimit. Create the ScanDirectory method that uses filepath.Walk with proper limit checking. Implement symlink detection to avoid infinite loops. Add depth calculation logic and skip directories when limits are reached. Stream results through a channel instead of building a complete list in memory.
+
+## 4. Add Performance Metrics Collection and Monitoring [done]
+### Dependencies: 20.2, 20.3
+### Description: Implement comprehensive performance metrics collection including cache hit/miss rates, scan durations, and file counts to enable monitoring and optimization
+### Details:
+Create the PerformanceMetrics struct with atomic counters for thread safety. Implement GetInfoWithMetrics method that wraps GetInfo with metric collection. Add cache hit/miss tracking, scan duration measurement, and file/directory count tracking. Use atomic operations for concurrent metric updates. Create methods to export metrics in a format suitable for monitoring systems.
+
+## 5. Implement Directory Watcher for Cache Invalidation [done]
+### Dependencies: 20.2
+### Description: Create a filesystem watcher that monitors directories for changes and automatically invalidates cache entries when files are added, removed, or renamed
+### Details:
+Implement DirectoryWatcher using fsnotify library. Create Watch method to add directories to monitoring. Implement handleEvents goroutine that processes filesystem events and invalidates appropriate cache entries. Handle Create, Remove, and Rename events by invalidating the parent directory cache. Add proper error handling and logging for watcher errors. Ensure watcher cleanup on shutdown.
+

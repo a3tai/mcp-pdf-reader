@@ -1,0 +1,279 @@
+# Task ID: 24
+# Title: Fix pdf_analyze_document Tool Content Processing
+# Status: pending
+# Dependencies: 2, 3, 5, 6, 9
+# Priority: high
+# Description: Debug and fix the pdf_analyze_document tool that is failing with 'no content elements provided for analysis' error, investigating the workflow from PDF parsing through content extraction to ensure proper document analysis functionality.
+# Details:
+Investigate and fix the broken pdf_analyze_document tool by tracing through the entire content processing pipeline:
+
+```go
+// cmd/pdf_analyze_document/main.go
+// First, add comprehensive debugging to trace the issue
+func analyzeDocument(pdfPath string) (*DocumentAnalysis, error) {
+    log.Printf("Starting document analysis for: %s", pdfPath)
+    
+    // Step 1: Verify PDF parsing is working
+    parser := pdf.NewParser()
+    doc, err := parser.Parse(pdfPath)
+    if err != nil {
+        return nil, fmt.Errorf("PDF parsing failed: %w", err)
+    }
+    log.Printf("PDF parsed successfully, pages: %d", doc.PageCount)
+    
+    // Step 2: Debug content extraction
+    extractor := extractors.NewContentExtractor()
+    content, err := extractor.ExtractAll(doc)
+    if err != nil {
+        return nil, fmt.Errorf("content extraction failed: %w", err)
+    }
+    log.Printf("Content extracted: %d elements", len(content.Elements))
+    
+    // Step 3: Fix the content element processing
+    if len(content.Elements) == 0 {
+        // This is likely where the issue is
+        log.Printf("WARNING: No content elements extracted")
+        // Check if the extractor is properly initialized
+        // Verify content stream parsing is working
+    }
+    
+    // Step 4: Ensure proper element type detection
+    analyzer := NewDocumentAnalyzer()
+    for _, element := range content.Elements {
+        log.Printf("Processing element type: %T, page: %d", element, element.GetPage())
+    }
+    
+    return analyzer.Analyze(content)
+}
+
+// internal/analysis/document_analyzer.go
+// Fix the content element processing logic
+type DocumentAnalyzer struct {
+    textExtractor   *extractors.TextExtractor
+    imageExtractor  *extractors.ImageExtractor
+    layoutAnalyzer  *extractors.LayoutAnalyzer
+}
+
+func (da *DocumentAnalyzer) Analyze(content *ExtractedContent) (*DocumentAnalysis, error) {
+    if content == nil || len(content.Elements) == 0 {
+        // Instead of returning error, try to extract content directly
+        log.Println("No pre-extracted content, attempting direct extraction")
+        
+        // Fallback to direct extraction
+        elements, err := da.extractContentElements(content.Document)
+        if err != nil {
+            return nil, fmt.Errorf("direct extraction failed: %w", err)
+        }
+        content.Elements = elements
+    }
+    
+    analysis := &DocumentAnalysis{
+        TotalPages:     content.Document.PageCount,
+        ContentSummary: make(map[string]int),
+        Elements:       make([]AnalyzedElement, 0),
+    }
+    
+    // Process each element with proper type checking
+    for _, elem := range content.Elements {
+        analyzed := da.analyzeElement(elem)
+        analysis.Elements = append(analysis.Elements, analyzed)
+        analysis.ContentSummary[analyzed.Type]++
+    }
+    
+    return analysis, nil
+}
+
+// Fix the content extraction workflow
+func (da *DocumentAnalyzer) extractContentElements(doc *PDFDocument) ([]ContentElement, error) {
+    var elements []ContentElement
+    
+    for pageNum := 1; pageNum <= doc.PageCount; pageNum++ {
+        page, err := doc.GetPage(pageNum)
+        if err != nil {
+            log.Printf("Failed to get page %d: %v", pageNum, err)
+            continue
+        }
+        
+        // Extract text elements
+        texts, err := da.textExtractor.ExtractFromPage(page)
+        if err != nil {
+            log.Printf("Text extraction failed for page %d: %v", pageNum, err)
+        } else {
+            for _, text := range texts {
+                elements = append(elements, text)
+            }
+        }
+        
+        // Extract images
+        images, err := da.imageExtractor.ExtractFromPage(page)
+        if err != nil {
+            log.Printf("Image extraction failed for page %d: %v", pageNum, err)
+        } else {
+            for _, img := range images {
+                elements = append(elements, img)
+            }
+        }
+        
+        // Extract layout elements (paragraphs, lines)
+        layout, err := da.layoutAnalyzer.AnalyzePage(page)
+        if err != nil {
+            log.Printf("Layout analysis failed for page %d: %v", pageNum, err)
+        } else {
+            elements = append(elements, layout.Elements...)
+        }
+    }
+    
+    return elements, nil
+}
+
+// Ensure proper initialization of extractors
+func NewDocumentAnalyzer() *DocumentAnalyzer {
+    return &DocumentAnalyzer{
+        textExtractor:  extractors.NewTextExtractor(),
+        imageExtractor: extractors.NewImageExtractor(),
+        layoutAnalyzer: extractors.NewLayoutAnalyzer(),
+    }
+}
+
+// Add validation to ensure extractors are working
+func (da *DocumentAnalyzer) validateExtractors() error {
+    if da.textExtractor == nil {
+        return errors.New("text extractor not initialized")
+    }
+    if da.imageExtractor == nil {
+        return errors.New("image extractor not initialized")
+    }
+    if da.layoutAnalyzer == nil {
+        return errors.New("layout analyzer not initialized")
+    }
+    return nil
+}
+```
+
+Additional fixes to implement:
+
+1. **Content Stream Processing Fix**:
+```go
+// Ensure content streams are properly decoded
+func (p *ContentStreamParser) Parse() ([]ContentElement, error) {
+    // Add proper error handling for empty streams
+    if len(p.stream) == 0 {
+        return nil, nil // Return empty slice, not error
+    }
+    
+    // Ensure proper operator parsing
+    tokens := p.tokenize()
+    for _, token := range tokens {
+        if err := p.processToken(token); err != nil {
+            log.Printf("Token processing error: %v", err)
+            // Continue processing instead of failing
+        }
+    }
+    
+    return p.elements, nil
+}
+```
+
+2. **Integration Test Fix**:
+```go
+// cmd/pdf_analyze_document/main_test.go
+func TestAnalyzeDocument(t *testing.T) {
+    // Test with various PDF types
+    testFiles := []string{
+        "testdata/simple_text.pdf",
+        "testdata/complex_layout.pdf",
+        "testdata/images_only.pdf",
+    }
+    
+    for _, file := range testFiles {
+        t.Run(file, func(t *testing.T) {
+            result, err := analyzeDocument(file)
+            assert.NoError(t, err)
+            assert.NotNil(t, result)
+            assert.Greater(t, len(result.Elements), 0)
+        })
+    }
+}
+```
+
+# Test Strategy:
+Comprehensive testing and debugging strategy to fix the pdf_analyze_document tool:
+
+1. **Root Cause Analysis**:
+   - Add verbose logging at each step of the content extraction pipeline
+   - Test with simple PDFs first (single page, text only) to isolate the issue
+   - Use debugger to step through the extraction process
+   - Verify that the PDF parser is correctly identifying content streams
+
+2. **Unit Testing Each Component**:
+   - Test ContentStreamParser with known content streams
+   - Verify TextExtractor returns elements for basic text PDFs
+   - Test ImageExtractor with PDFs containing only images
+   - Ensure LayoutAnalyzer properly groups text elements
+
+3. **Integration Testing**:
+   - Create minimal test PDFs with known content
+   - Test the complete workflow from PDF file to analysis result
+   - Verify that content elements are properly passed between components
+   - Test with PDFs that previously failed with the error
+
+4. **Error Handling Verification**:
+   - Test with empty PDFs
+   - Test with PDFs containing only metadata (no content)
+   - Test with encrypted or corrupted PDFs
+   - Ensure graceful degradation instead of complete failure
+
+5. **Performance Testing**:
+   - Verify the fix doesn't introduce performance regressions
+   - Test with large PDFs to ensure memory usage is reasonable
+   - Profile the extraction process to identify bottlenecks
+
+6. **Regression Testing**:
+   - Create a test suite with PDFs that previously failed
+   - Ensure all test cases pass after the fix
+   - Add new test cases for edge cases discovered during debugging
+   - Set up continuous testing to prevent future regressions
+
+# Subtasks:
+## 1. Add Comprehensive Debugging and Logging Infrastructure [pending]
+### Dependencies: None
+### Description: Implement detailed logging throughout the PDF analysis pipeline to trace the flow of data and identify where content elements are being lost
+### Details:
+Add log statements in analyzeDocument() function to trace PDF parsing, content extraction, and element processing. Include logging for page counts, extracted element counts, and element types. Implement structured logging with appropriate log levels (DEBUG, INFO, WARN, ERROR) to facilitate troubleshooting.
+
+## 2. Fix Content Stream Parser Empty Stream Handling [pending]
+### Dependencies: 24.1
+### Description: Update the ContentStreamParser to properly handle empty content streams without throwing errors, ensuring the parser continues processing other valid content
+### Details:
+Modify ContentStreamParser.Parse() to return an empty slice instead of an error when encountering empty streams. Add error recovery in processToken() to log errors but continue processing. Ensure tokenization handles edge cases gracefully.
+
+## 3. Implement Direct Content Extraction Fallback [pending]
+### Dependencies: 24.2
+### Description: Create a fallback mechanism in DocumentAnalyzer that attempts direct content extraction when pre-extracted content is empty or missing
+### Details:
+Implement extractContentElements() method that directly extracts text, images, and layout elements from each page. Add proper error handling to continue processing even if individual page extraction fails. Ensure all extractor types (text, image, layout) are attempted for each page.
+
+## 4. Fix Extractor Initialization and Validation [pending]
+### Dependencies: 24.3
+### Description: Ensure all content extractors (text, image, layout) are properly initialized and validated before use in the DocumentAnalyzer
+### Details:
+Update NewDocumentAnalyzer() to properly initialize all extractors with required configurations. Implement validateExtractors() method to check extractor initialization. Add nil checks before using any extractor. Create factory methods for consistent extractor creation.
+
+## 5. Enhance Element Type Detection and Processing [pending]
+### Dependencies: 24.4
+### Description: Improve the analyzeElement() method to properly identify and categorize different content element types with appropriate metadata extraction
+### Details:
+Implement type checking for TextElement, ImageElement, and LayoutElement types. Extract relevant metadata for each element type (text content, image dimensions, layout boundaries). Add proper type assertion with error handling. Ensure ContentSummary accurately reflects element type counts.
+
+## 6. Fix Content Extraction Workflow Integration [pending]
+### Dependencies: 24.5
+### Description: Ensure the complete workflow from PDF parsing through content extraction to analysis works end-to-end without losing content elements
+### Details:
+Update ExtractAll() method in ContentExtractor to properly aggregate elements from all pages. Ensure proper error propagation without stopping the entire process. Add recovery mechanisms for partial failures. Verify that Elements array is properly populated before analysis.
+
+## 7. Create Comprehensive Integration Tests [pending]
+### Dependencies: 24.6
+### Description: Develop a full test suite that validates the pdf_analyze_document tool works correctly with various PDF types and edge cases
+### Details:
+Create test PDFs covering simple text, complex layouts, image-only documents, and mixed content. Test error scenarios including corrupted PDFs and unsupported formats. Verify output DocumentAnalysis structure contains expected elements and counts. Add benchmarks for performance validation.
+

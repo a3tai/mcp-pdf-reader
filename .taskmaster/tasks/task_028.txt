@@ -1,0 +1,273 @@
+# Task ID: 28
+# Title: Fix MediaBox Parsing Errors in pdf_extract_structured Tool
+# Status: pending
+# Dependencies: 2, 3, 4, 10
+# Priority: high
+# Description: Debug and fix the pdf_extract_structured tool's MediaBox parsing failures that prevent advanced extraction features from working on certain PDF documents, improving the robustness of PDF page dimension parsing.
+# Details:
+Investigate and fix the MediaBox parsing errors in the pdf_extract_structured tool by implementing robust page dimension parsing:
+
+```go
+// internal/pdf/parser/page_parser.go
+// Fix MediaBox parsing to handle various PDF specifications
+type PageParser struct {
+    objectResolver *ObjectResolver
+    logger         *log.Logger
+}
+
+func (pp *PageParser) ParseMediaBox(pageDict map[string]interface{}) (*Rectangle, error) {
+    pp.logger.Debug("Parsing MediaBox from page dictionary")
+    
+    // Step 1: Handle MediaBox inheritance from parent pages
+    mediaBox := pp.findInheritedAttribute(pageDict, "MediaBox")
+    if mediaBox == nil {
+        // Default to US Letter size if MediaBox is missing
+        pp.logger.Warn("MediaBox not found, using default US Letter size")
+        return &Rectangle{
+            LLX: 0,
+            LLY: 0,
+            URX: 612,  // 8.5 inches * 72 DPI
+            URY: 792,  // 11 inches * 72 DPI
+        }, nil
+    }
+    
+    // Step 2: Handle various MediaBox formats
+    switch v := mediaBox.(type) {
+    case []interface{}:
+        return pp.parseRectangleArray(v)
+    case *PDFArray:
+        return pp.parseRectangleArray(v.Elements)
+    case *PDFIndirectObject:
+        // Resolve indirect reference
+        resolved, err := pp.objectResolver.ResolveObject(v)
+        if err != nil {
+            return nil, fmt.Errorf("failed to resolve MediaBox reference: %w", err)
+        }
+        return pp.ParseMediaBox(map[string]interface{}{"MediaBox": resolved})
+    default:
+        return nil, fmt.Errorf("unexpected MediaBox type: %T", v)
+    }
+}
+
+func (pp *PageParser) parseRectangleArray(arr []interface{}) (*Rectangle, error) {
+    if len(arr) != 4 {
+        return nil, fmt.Errorf("invalid MediaBox array length: %d", len(arr))
+    }
+    
+    rect := &Rectangle{}
+    coords := []*float64{&rect.LLX, &rect.LLY, &rect.URX, &rect.URY}
+    
+    for i, val := range arr {
+        num, err := pp.parseNumber(val)
+        if err != nil {
+            return nil, fmt.Errorf("invalid coordinate at index %d: %w", i, err)
+        }
+        *coords[i] = num
+    }
+    
+    // Validate rectangle
+    if rect.URX <= rect.LLX || rect.URY <= rect.LLY {
+        return nil, fmt.Errorf("invalid MediaBox dimensions: %v", rect)
+    }
+    
+    return rect, nil
+}
+
+func (pp *PageParser) parseNumber(val interface{}) (float64, error) {
+    switch v := val.(type) {
+    case float64:
+        return v, nil
+    case int:
+        return float64(v), nil
+    case int64:
+        return float64(v), nil
+    case *PDFNumber:
+        return v.Value, nil
+    case *PDFInteger:
+        return float64(v.Value), nil
+    case string:
+        // Handle numeric strings
+        return strconv.ParseFloat(v, 64)
+    default:
+        return 0, fmt.Errorf("cannot parse number from type %T", v)
+    }
+}
+
+func (pp *PageParser) findInheritedAttribute(pageDict map[string]interface{}, attr string) interface{} {
+    // Check current page
+    if val, exists := pageDict[attr]; exists {
+        return val
+    }
+    
+    // Check parent pages recursively
+    if parent, exists := pageDict["Parent"]; exists {
+        if parentDict, ok := parent.(map[string]interface{}); ok {
+            return pp.findInheritedAttribute(parentDict, attr)
+        }
+    }
+    
+    return nil
+}
+
+// cmd/pdf_extract_structured/main.go
+// Update the tool to use robust MediaBox parsing
+func extractStructured(pdfPath string) (*StructuredContent, error) {
+    // Enable debug logging for MediaBox issues
+    logger := log.New(os.Stderr, "[MediaBox] ", log.LstdFlags)
+    
+    parser := pdf.NewParser(pdf.WithLogger(logger))
+    doc, err := parser.Parse(pdfPath)
+    if err != nil {
+        return nil, fmt.Errorf("failed to parse PDF: %w", err)
+    }
+    
+    structured := &StructuredContent{
+        Pages: make([]PageStructure, 0),
+    }
+    
+    // Process each page with error recovery
+    for i, page := range doc.Pages {
+        logger.Printf("Processing page %d", i+1)
+        
+        pageStruct, err := extractPageStructure(page)
+        if err != nil {
+            // Log error but continue processing other pages
+            logger.Printf("Warning: Failed to extract page %d: %v", i+1, err)
+            
+            // Add placeholder page with error info
+            pageStruct = PageStructure{
+                PageNumber: i + 1,
+                Error:      err.Error(),
+                MediaBox:   getDefaultMediaBox(),
+            }
+        }
+        
+        structured.Pages = append(structured.Pages, pageStruct)
+    }
+    
+    return structured, nil
+}
+
+// internal/pdf/recovery/mediabox_recovery.go
+// Implement MediaBox recovery strategies
+type MediaBoxRecovery struct {
+    logger *log.Logger
+}
+
+func (mr *MediaBoxRecovery) RecoverMediaBox(pageObj map[string]interface{}) (*Rectangle, error) {
+    strategies := []func(map[string]interface{}) (*Rectangle, error){
+        mr.tryDirectMediaBox,
+        mr.tryInheritedMediaBox,
+        mr.tryCropBox,
+        mr.tryArtBox,
+        mr.tryDefaultSize,
+    }
+    
+    for _, strategy := range strategies {
+        if rect, err := strategy(pageObj); err == nil && rect != nil {
+            mr.logger.Printf("MediaBox recovered using strategy: %v", rect)
+            return rect, nil
+        }
+    }
+    
+    return nil, fmt.Errorf("all MediaBox recovery strategies failed")
+}
+
+func (mr *MediaBoxRecovery) tryDirectMediaBox(pageObj map[string]interface{}) (*Rectangle, error) {
+    if mb, exists := pageObj["MediaBox"]; exists {
+        return parseMediaBoxValue(mb)
+    }
+    return nil, fmt.Errorf("no direct MediaBox found")
+}
+
+func (mr *MediaBoxRecovery) tryCropBox(pageObj map[string]interface{}) (*Rectangle, error) {
+    // CropBox can be used as fallback for MediaBox
+    if cb, exists := pageObj["CropBox"]; exists {
+        mr.logger.Warn("Using CropBox as MediaBox fallback")
+        return parseMediaBoxValue(cb)
+    }
+    return nil, fmt.Errorf("no CropBox found")
+}
+
+// pkg/models/structured.go
+// Update structured content model to include error handling
+type PageStructure struct {
+    PageNumber int         `json:"pageNumber"`
+    MediaBox   *Rectangle  `json:"mediaBox"`
+    Content    []Content   `json:"content,omitempty"`
+    Error      string      `json:"error,omitempty"`
+}
+```
+
+# Test Strategy:
+Comprehensive testing strategy to verify MediaBox parsing fixes:
+
+1. **Error Reproduction**:
+   - Collect PDF samples that trigger "invalid MediaBox" errors
+   - Create test cases for various MediaBox formats (direct arrays, indirect references, inherited values)
+   - Test with PDFs missing MediaBox entirely
+   - Verify the exact error conditions and stack traces
+
+2. **MediaBox Format Testing**:
+   - Test PDFs with MediaBox as direct array: [0 0 612 792]
+   - Test with indirect object references: "MediaBox 5 0 R"
+   - Test with inherited MediaBox from parent page tree nodes
+   - Test with numeric strings vs numeric values
+   - Test with integer vs float coordinates
+
+3. **Edge Case Validation**:
+   - PDFs with rotated pages (MediaBox with Rotate attribute)
+   - Non-standard page sizes (A4, Legal, custom dimensions)
+   - Negative coordinates in MediaBox
+   - MediaBox with CropBox/BleedBox/TrimBox/ArtBox
+   - Malformed MediaBox arrays (wrong number of elements, non-numeric values)
+
+4. **Recovery Testing**:
+   - Verify fallback to CropBox when MediaBox is missing
+   - Test default page size assignment (US Letter)
+   - Ensure tool continues processing remaining pages after MediaBox errors
+   - Validate error reporting includes page numbers and specific issues
+
+5. **Integration Testing**:
+   - Run pdf_extract_structured on previously failing documents
+   - Verify all advanced extraction features work after MediaBox fix
+   - Compare extracted dimensions with PDF viewers (Adobe Reader, Preview)
+   - Test performance impact of robust parsing
+
+# Subtasks:
+## 1. Implement Robust Number Parsing for PDF Values [pending]
+### Dependencies: None
+### Description: Create a comprehensive number parsing function that handles all PDF numeric types including integers, floats, PDFNumber objects, PDFInteger objects, and numeric strings
+### Details:
+Implement the parseNumber method in PageParser that safely converts various PDF value types to float64. Handle edge cases like nil values, invalid strings, and type assertions. Add proper error messages for debugging.
+
+## 2. Build Rectangle Array Parser with Validation [pending]
+### Dependencies: 28.1
+### Description: Implement the parseRectangleArray function to convert PDF array representations into Rectangle structs with proper coordinate validation
+### Details:
+Parse 4-element arrays into Rectangle structs (LLX, LLY, URX, URY). Validate that upper-right coordinates are greater than lower-left coordinates. Handle both []interface{} and PDFArray types. Use the parseNumber function for each coordinate.
+
+## 3. Implement MediaBox Inheritance Resolution [pending]
+### Dependencies: None
+### Description: Create the findInheritedAttribute method to traverse the PDF page tree and inherit MediaBox values from parent pages when not directly specified
+### Details:
+Recursively check parent pages for MediaBox attribute when not found in current page. Handle circular references and missing parent links. Support generic attribute inheritance for reusability with other inherited properties.
+
+## 4. Create MediaBox Recovery Strategies [pending]
+### Dependencies: 28.1, 28.2, 28.3
+### Description: Implement the MediaBoxRecovery class with multiple fallback strategies for recovering page dimensions when standard parsing fails
+### Details:
+Implement recovery strategies in order: direct MediaBox, inherited MediaBox, CropBox fallback, ArtBox fallback, and default US Letter size. Log which strategy succeeded for debugging. Each strategy should return nil on failure to try the next one.
+
+## 5. Integrate Robust Parsing into Main Tool [pending]
+### Dependencies: 28.1, 28.2, 28.3, 28.4
+### Description: Update the pdf_extract_structured tool's main function to use the new robust MediaBox parsing with error recovery and continue processing on failures
+### Details:
+Modify extractStructured to use the new PageParser with MediaBoxRecovery. Add debug logging for MediaBox parsing. Implement graceful degradation where pages with parsing errors still get processed with default dimensions and error information.
+
+## 6. Add Comprehensive Error Handling and Logging [pending]
+### Dependencies: 28.5
+### Description: Enhance error handling throughout the MediaBox parsing pipeline with detailed logging and update the PageStructure model to include error information
+### Details:
+Add structured logging at each parsing step. Update PageStructure model to include an Error field. Ensure all errors are logged but don't stop processing. Include page numbers and parsing context in error messages for easier debugging.
+

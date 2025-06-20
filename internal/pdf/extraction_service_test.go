@@ -1,6 +1,7 @@
 package pdf
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -102,8 +103,7 @@ func TestExtractionService_ExtractStructured(t *testing.T) {
 				Path: createTempFile(t, "test.pdf", generateMinimalPDFContent()),
 				Mode: "",
 			},
-			wantError: true, // Minimal PDF may not parse correctly
-			errorMsg:  "failed to open PDF",
+			wantError: false, // Valid PDF should parse successfully
 		},
 		{
 			name: "valid request with structured mode",
@@ -115,8 +115,7 @@ func TestExtractionService_ExtractStructured(t *testing.T) {
 					IncludeCoordinates: true,
 				},
 			},
-			wantError: true, // Minimal PDF may not parse correctly
-			errorMsg:  "failed to open PDF",
+			wantError: false, // Valid PDF should parse successfully
 		},
 	}
 
@@ -190,8 +189,7 @@ func TestExtractionService_ExtractTables(t *testing.T) {
 					IncludeCoordinates: true,
 				},
 			},
-			wantError: true, // Minimal PDF may not parse correctly
-			errorMsg:  "failed to open PDF",
+			wantError: false, // Valid PDF should parse successfully
 		},
 	}
 
@@ -234,15 +232,14 @@ func TestExtractionService_ExtractSemantic(t *testing.T) {
 		Path: createTempFile(t, "test.pdf", generateMinimalPDFContent()),
 	}
 
-	_, err := service.ExtractSemantic(req)
-	// Expect error since minimal PDF may not parse correctly
-	if err == nil {
-		t.Errorf("ExtractSemantic() expected error but got none")
+	result, err := service.ExtractSemantic(req)
+	if err != nil {
+		t.Errorf("ExtractSemantic() unexpected error = %v", err)
 		return
 	}
 
-	if !containsString(err.Error(), "failed to open PDF") {
-		t.Errorf("ExtractSemantic() unexpected error = %v", err)
+	if result == nil {
+		t.Error("ExtractSemantic() returned nil result")
 	}
 }
 
@@ -255,15 +252,14 @@ func TestExtractionService_ExtractComplete(t *testing.T) {
 		Mode: "complete",
 	}
 
-	_, err := service.ExtractComplete(req)
-	// Expect error since minimal PDF may not parse correctly
-	if err == nil {
-		t.Errorf("ExtractComplete() expected error but got none")
+	result, err := service.ExtractComplete(req)
+	if err != nil {
+		t.Errorf("ExtractComplete() unexpected error = %v", err)
 		return
 	}
 
-	if !containsString(err.Error(), "failed to open PDF") {
-		t.Errorf("ExtractComplete() unexpected error = %v", err)
+	if result == nil {
+		t.Error("ExtractComplete() returned nil result")
 	}
 }
 
@@ -296,8 +292,7 @@ func TestExtractionService_QueryContent(t *testing.T) {
 					MinConfidence: 0.5,
 				},
 			},
-			wantError: true, // Minimal PDF may not parse correctly
-			errorMsg:  "failed to extract content for querying",
+			wantError: false, // Valid PDF should parse successfully
 		},
 	}
 
@@ -408,10 +403,21 @@ func TestExtractionService_GetMetadata(t *testing.T) {
 			path:      createTempFile(t, "test.pdf", generateMinimalPDFContent()),
 			wantError: false,
 		},
+		{
+			name:      "real PDF file",
+			path:      "../../docs/examples/dev-example.pdf",
+			wantError: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Skip tests if the PDF file doesn't exist (e.g., in CI environments)
+			if !tt.wantError && !fileExists(tt.path) {
+				t.Skipf("Test PDF file not found: %s", tt.path)
+				return
+			}
+
 			result, err := service.GetMetadata(tt.path)
 
 			if tt.wantError {
@@ -428,6 +434,20 @@ func TestExtractionService_GetMetadata(t *testing.T) {
 
 			if result == nil {
 				t.Error("GetMetadata() returned nil result")
+				return
+			}
+
+			// For real PDF files, verify that we can extract some metadata
+			if tt.name == "real PDF file" {
+				// The metadata extraction should work and return a non-nil result
+				// We don't expect specific values, but the extraction should succeed
+				t.Logf("Extracted metadata: Title='%s', Author='%s', Subject='%s', Producer='%s', Version='%s', Encrypted=%v",
+					result.Title, result.Author, result.Subject, result.Producer, result.Version, result.Encrypted)
+
+				// Verify that our implementation returns a valid version
+				if result.Version == "" {
+					t.Error("GetMetadata() Version should not be empty")
+				}
 			}
 		})
 	}
@@ -534,42 +554,42 @@ func createLargeFile(t *testing.T, size int64) string {
 }
 
 func generateMinimalPDFContent() string {
-	// This is a minimal PDF structure that should parse without errors
-	return `%PDF-1.4
-1 0 obj
-<<
-/Type /Catalog
-/Pages 2 0 R
->>
-endobj
-2 0 obj
-<<
-/Type /Pages
-/Kids [3 0 R]
-/Count 1
->>
-endobj
-3 0 obj
-<<
-/Type /Page
-/Parent 2 0 R
-/MediaBox [0 0 612 792]
->>
-endobj
-xref
-0 4
-0000000000 65535 f
-0000000010 00000 n
-0000000053 00000 n
-0000000125 00000 n
-trailer
-<<
-/Size 4
-/Root 1 0 R
->>
-startxref
-196
-%%EOF`
+	// Create a properly formatted PDF with accurate byte offsets
+	pdf := "%PDF-1.4\n"
+
+	// Object 1 - Catalog
+	obj1Start := len(pdf)
+	pdf += "1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n"
+
+	// Object 2 - Pages
+	obj2Start := len(pdf)
+	pdf += "2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n"
+
+	// Object 3 - Page
+	obj3Start := len(pdf)
+	pdf += "3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [0 0 612 792]\n/Resources <<>>\n>>\nendobj\n"
+
+	// Cross-reference table
+	xrefStart := len(pdf)
+	pdf += "xref\n0 4\n0000000000 65535 f \n"
+	pdf += fmt.Sprintf("%010d 00000 n \n", obj1Start)
+	pdf += fmt.Sprintf("%010d 00000 n \n", obj2Start)
+	pdf += fmt.Sprintf("%010d 00000 n \n", obj3Start)
+
+	// Trailer
+	pdf += "trailer\n<<\n/Size 4\n/Root 1 0 R\n>>\nstartxref\n"
+	pdf += fmt.Sprintf("%d\n", xrefStart)
+	pdf += "%%EOF"
+
+	return pdf
+}
+
+// Helper function to check if a file exists
+func fileExists(path string) bool {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return false
+	}
+	return true
 }
 
 func containsString(s, substr string) bool {

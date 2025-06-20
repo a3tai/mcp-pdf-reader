@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
 	"github.com/a3tai/mcp-pdf-reader/internal/config"
+	"github.com/a3tai/mcp-pdf-reader/internal/descriptions"
 	"github.com/a3tai/mcp-pdf-reader/internal/intelligence"
 	"github.com/a3tai/mcp-pdf-reader/internal/pdf"
 	"github.com/a3tai/mcp-pdf-reader/internal/pdf/extraction"
+	"github.com/a3tai/mcp-pdf-reader/internal/pdf/stability"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -20,6 +23,22 @@ type Server struct {
 	pdfService       *pdf.Service
 	mcpServer        *server.MCPServer
 	documentAnalyzer *intelligence.DocumentAnalyzer
+	stableExtraction *stability.StableExtractionService
+}
+
+// convertExtractionConfig converts pdf.ExtractionConfig to pdf.ExtractConfig
+func convertExtractionConfig(config pdf.ExtractionConfig) pdf.ExtractConfig {
+	return pdf.ExtractConfig{
+		ExtractText:        config.ExtractText,
+		ExtractImages:      config.ExtractImages,
+		ExtractTables:      config.ExtractTables,
+		ExtractForms:       config.ExtractForms,
+		ExtractAnnotations: config.ExtractAnnotations,
+		IncludeCoordinates: config.IncludeCoordinates,
+		IncludeFormatting:  config.IncludeFormatting,
+		Pages:              config.Pages,
+		MinConfidence:      config.MinConfidence,
+	}
 }
 
 // NewServer creates a new MCP server instance
@@ -40,6 +59,7 @@ func NewServer(cfg *config.Config, pdfService *pdf.Service) (*Server, error) {
 		pdfService:       pdfService,
 		mcpServer:        mcpServer,
 		documentAnalyzer: intelligence.NewDocumentAnalyzer(),
+		stableExtraction: stability.NewStableExtractionService(100 * 1024 * 1024), // 100MB limit
 	}
 
 	// Register tools
@@ -60,10 +80,10 @@ func (s *Server) registerBasicTools() {
 	// Register PDF read file tool
 	pdfReadFileTool := mcp.NewTool(
 		"pdf_read_file",
-		mcp.WithDescription("Read and extract text content from a PDF file"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_read_file")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 	)
 	s.mcpServer.AddTool(pdfReadFileTool, s.handlePDFReadFile)
@@ -71,10 +91,10 @@ func (s *Server) registerBasicTools() {
 	// Register PDF assets file tool
 	pdfAssetsFileTool := mcp.NewTool(
 		"pdf_assets_file",
-		mcp.WithDescription("Extract visual assets like images from a PDF file"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_assets_file")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 	)
 	s.mcpServer.AddTool(pdfAssetsFileTool, s.handlePDFAssetsFile)
@@ -82,10 +102,10 @@ func (s *Server) registerBasicTools() {
 	// Register PDF validate file tool
 	pdfValidateFileTool := mcp.NewTool(
 		"pdf_validate_file",
-		mcp.WithDescription("Validate if a file is a readable PDF"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_validate_file")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 	)
 	s.mcpServer.AddTool(pdfValidateFileTool, s.handlePDFValidateFile)
@@ -93,10 +113,10 @@ func (s *Server) registerBasicTools() {
 	// Register PDF stats file tool
 	pdfStatsFileTool := mcp.NewTool(
 		"pdf_stats_file",
-		mcp.WithDescription("Get detailed statistics about a PDF file"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_stats_file")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 	)
 	s.mcpServer.AddTool(pdfStatsFileTool, s.handlePDFStatsFile)
@@ -107,10 +127,10 @@ func (s *Server) registerExtractionTools() {
 	// Register PDF extract structured tool
 	pdfExtractStructuredTool := mcp.NewTool(
 		"pdf_extract_structured",
-		mcp.WithDescription("Extract structured content with positioning and formatting information"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_extract_structured")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 		mcp.WithString("mode",
 			mcp.Description("Extraction mode: raw, structured, semantic, table, complete (default: structured)"),
@@ -124,10 +144,10 @@ func (s *Server) registerExtractionTools() {
 	// Register PDF extract tables tool
 	pdfExtractTablesTool := mcp.NewTool(
 		"pdf_extract_tables",
-		mcp.WithDescription("Extract tabular data from PDF with structure preservation"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_extract_tables")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 		mcp.WithString("config",
 			mcp.Description("JSON string with extraction configuration options"),
@@ -138,10 +158,10 @@ func (s *Server) registerExtractionTools() {
 	// Register PDF extract forms tool
 	pdfExtractFormsTool := mcp.NewTool(
 		"pdf_extract_forms",
-		mcp.WithDescription("Extract form fields including text fields, checkboxes, radio buttons, and dropdowns"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_extract_forms")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 		mcp.WithString("config",
 			mcp.Description("JSON string with extraction configuration options"),
@@ -152,10 +172,10 @@ func (s *Server) registerExtractionTools() {
 	// Register PDF extract semantic tool
 	pdfExtractSemanticTool := mcp.NewTool(
 		"pdf_extract_semantic",
-		mcp.WithDescription("Extract content with semantic grouping and relationship detection"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_extract_semantic")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 		mcp.WithString("config",
 			mcp.Description("JSON string with extraction configuration options"),
@@ -166,10 +186,10 @@ func (s *Server) registerExtractionTools() {
 	// Register PDF extract complete tool
 	pdfExtractCompleteTool := mcp.NewTool(
 		"pdf_extract_complete",
-		mcp.WithDescription("Comprehensive extraction of all content types (text, images, tables, forms, annotations)"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_extract_complete")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 		mcp.WithString("config",
 			mcp.Description("JSON string with extraction configuration options"),
@@ -180,10 +200,10 @@ func (s *Server) registerExtractionTools() {
 	// Register PDF query content tool
 	pdfQueryContentTool := mcp.NewTool(
 		"pdf_query_content",
-		mcp.WithDescription("Query and filter extracted PDF content using search criteria"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_query_content")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 		mcp.WithString("query",
 			mcp.Required(),
@@ -195,10 +215,10 @@ func (s *Server) registerExtractionTools() {
 	// Register PDF analyze document tool
 	pdfAnalyzeDocumentTool := mcp.NewTool(
 		"pdf_analyze_document",
-		mcp.WithDescription("Perform comprehensive document analysis including type classification, structure detection, quality assessment, and insights generation"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_analyze_document")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 		mcp.WithString("config",
 			mcp.Description("JSON string with analysis configuration options"),
@@ -212,9 +232,9 @@ func (s *Server) registerUtilityTools() {
 	// Register PDF search directory tool
 	pdfSearchDirectoryTool := mcp.NewTool(
 		"pdf_search_directory",
-		mcp.WithDescription("Search for PDF files in a directory with optional fuzzy search"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_search_directory")),
 		mcp.WithString("directory",
-			mcp.Description("Directory path to search (uses default if empty)"),
+			mcp.Description("Directory path to search (uses current directory if empty, supports relative paths)"),
 		),
 		mcp.WithString("query",
 			mcp.Description("Optional search query for fuzzy matching"),
@@ -225,9 +245,9 @@ func (s *Server) registerUtilityTools() {
 	// Register PDF stats directory tool
 	pdfStatsDirectoryTool := mcp.NewTool(
 		"pdf_stats_directory",
-		mcp.WithDescription("Get statistics about PDF files in a directory"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_stats_directory")),
 		mcp.WithString("directory",
-			mcp.Description("Directory path to analyze (uses default if empty)"),
+			mcp.Description("Directory path to analyze (uses current directory if empty, supports relative paths)"),
 		),
 	)
 	s.mcpServer.AddTool(pdfStatsDirectoryTool, s.handlePDFStatsDirectory)
@@ -235,17 +255,17 @@ func (s *Server) registerUtilityTools() {
 	// Register PDF server info tool
 	pdfServerInfoTool := mcp.NewTool(
 		"pdf_server_info",
-		mcp.WithDescription("Get server information, available tools, directory contents, and usage guidance"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_server_info")),
 	)
 	s.mcpServer.AddTool(pdfServerInfoTool, s.handlePDFServerInfo)
 
 	// Register PDF get page info tool
 	pdfGetPageInfoTool := mcp.NewTool(
 		"pdf_get_page_info",
-		mcp.WithDescription("Get detailed information about PDF pages (dimensions, layout, etc.)"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_get_page_info")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 	)
 	s.mcpServer.AddTool(pdfGetPageInfoTool, s.handlePDFGetPageInfo)
@@ -253,10 +273,10 @@ func (s *Server) registerUtilityTools() {
 	// Register PDF get metadata tool
 	pdfGetMetadataTool := mcp.NewTool(
 		"pdf_get_metadata",
-		mcp.WithDescription("Extract comprehensive document metadata and properties"),
+		mcp.WithDescription(descriptions.GetToolDescription("pdf_get_metadata")),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Full path to the PDF file"),
+			mcp.Description("Full path to the PDF file (supports both absolute and relative paths)"),
 		),
 	)
 	s.mcpServer.AddTool(pdfGetMetadataTool, s.handlePDFGetMetadata)
@@ -416,7 +436,7 @@ func (s *Server) handlePDFStatsDirectory(ctx context.Context, request mcp.CallTo
 
 func (s *Server) handlePDFServerInfo(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	req := pdf.PDFServerInfoRequest{}
-	result, err := s.pdfService.PDFServerInfo(req, s.config.ServerName, s.config.Version, s.config.PDFDirectory)
+	result, err := s.pdfService.PDFServerInfo(ctx, req, s.config.ServerName, s.config.Version, s.config.PDFDirectory)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -457,7 +477,14 @@ func (s *Server) handlePDFExtractStructured(
 		}
 	}
 
-	result, err := s.pdfService.ExtractStructured(req)
+	// Convert PDFExtractStructuredRequest to PDFExtractRequest
+	extractReq := pdf.PDFExtractRequest{
+		Path:   req.Path,
+		Mode:   req.Mode,
+		Config: convertExtractionConfig(req.Config),
+		Query:  req.Query,
+	}
+	result, err := s.stableExtraction.ExtractStructured(extractReq)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -570,7 +597,13 @@ func (s *Server) handlePDFExtractComplete(
 		}
 	}
 
-	result, err := s.pdfService.ExtractComplete(req)
+	// Convert PDFExtractCompleteRequest to PDFExtractRequest
+	extractReq := pdf.PDFExtractRequest{
+		Path:   req.Path,
+		Mode:   "complete",
+		Config: convertExtractionConfig(req.Config),
+	}
+	result, err := s.stableExtraction.ExtractComplete(extractReq)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -601,7 +634,12 @@ func (s *Server) handlePDFQueryContent(ctx context.Context, request mcp.CallTool
 		Query: query,
 	}
 
-	result, err := s.pdfService.QueryContent(req)
+	// Convert PDFQueryContentRequest to PDFQueryRequest
+	queryReq := pdf.PDFQueryRequest{
+		Path:  req.Path,
+		Query: req.Query,
+	}
+	result, err := s.stableExtraction.QueryContent(queryReq)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -616,8 +654,7 @@ func (s *Server) handlePDFGetPageInfo(ctx context.Context, request mcp.CallToolR
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	req := pdf.PDFGetPageInfoRequest{Path: path}
-	result, err := s.pdfService.GetPageInfo(req)
+	result, err := s.stableExtraction.GetPageInfo(path)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -632,13 +669,17 @@ func (s *Server) handlePDFGetMetadata(ctx context.Context, request mcp.CallToolR
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	req := pdf.PDFGetMetadataRequest{Path: path}
-	result, err := s.pdfService.GetMetadata(req)
+	result, err := s.stableExtraction.GetMetadata(path)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	responseText := s.formatPDFMetadataResult(result)
+	// Convert DocumentMetadata to PDFMetadataResult for formatting
+	metadataResult := &pdf.PDFMetadataResult{
+		FilePath: path,
+		Metadata: *result,
+	}
+	responseText := s.formatPDFMetadataResult(metadataResult)
 	return mcp.NewToolResultText(responseText), nil
 }
 
@@ -664,9 +705,16 @@ func (s *Server) handlePDFAnalyzeDocument(ctx context.Context, request mcp.CallT
 		Config: config,
 	}
 
-	extractResult, err := s.pdfService.ExtractStructured(extractReq)
+	// Convert PDFExtractStructuredRequest to PDFExtractRequest
+	convertedReq := pdf.PDFExtractRequest{
+		Path:   extractReq.Path,
+		Mode:   extractReq.Mode,
+		Config: convertExtractionConfig(extractReq.Config),
+		Query:  extractReq.Query,
+	}
+	extractResult, err := s.stableExtraction.ExtractStructured(convertedReq)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to extract content for analysis: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to extract content for analysis: %v\n\nTroubleshooting:\n• Check if the PDF file exists and is readable\n• Verify the PDF is not corrupted or password-protected\n• Try using pdf_validate_file to check document integrity", err)), nil
 	}
 
 	// Convert extraction result to content elements
@@ -675,7 +723,13 @@ func (s *Server) handlePDFAnalyzeDocument(ctx context.Context, request mcp.CallT
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to convert extracted content: %v", err)), nil
 	}
 
-	// Perform document analysis
+	// Add debugging information about extracted content
+	fmt.Fprintf(os.Stderr, "[AnalyzeDocument] Extracted %d elements from %s\n", len(elements), path)
+	if len(elements) == 0 {
+		fmt.Fprintf(os.Stderr, "[AnalyzeDocument] WARNING: No content elements extracted - document may be image-based or corrupted\n")
+	}
+
+	// Perform document analysis (now handles empty content gracefully)
 	analysis, err := s.documentAnalyzer.Analyze(elements)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Document analysis failed: %v", err)), nil

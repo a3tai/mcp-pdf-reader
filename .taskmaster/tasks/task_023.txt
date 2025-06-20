@@ -1,0 +1,242 @@
+# Task ID: 23
+# Title: Implement Intelligent PDF Content Chunking
+# Status: pending
+# Dependencies: 19, 22, 5, 9
+# Priority: medium
+# Description: Build an intelligent content chunking system that automatically splits large PDF documents into logical sections (chapters, sections, paragraphs) based on structural analysis, formatting cues, and semantic boundaries for improved processing of complex documents like technical specifications.
+# Details:
+Implement a comprehensive PDF content chunking system that analyzes document structure and intelligently splits content:
+
+```go
+// internal/pdf/chunking/analyzer.go
+package chunking
+
+import (
+    "github.com/yourusername/pdfextract/internal/pdf/streaming"
+    "github.com/yourusername/pdfextract/pkg/models"
+)
+
+type ContentAnalyzer struct {
+    streamParser *streaming.StreamParser
+    layoutEngine *LayoutAnalysisEngine
+    chunkBuilder *ChunkBuilder
+}
+
+type StructuralElement struct {
+    Type       ElementType  `json:"type"` // chapter, section, subsection, paragraph
+    Level      int         `json:"level"`
+    Title      string      `json:"title,omitempty"`
+    StartPage  int         `json:"startPage"`
+    EndPage    int         `json:"endPage"`
+    StartPos   Position    `json:"startPos"`
+    EndPos     Position    `json:"endPos"`
+    FontInfo   FontMetrics `json:"fontInfo"`
+    Children   []StructuralElement `json:"children,omitempty"`
+}
+
+type ChunkingStrategy struct {
+    MaxChunkSize      int     `json:"maxChunkSize"`      // Max chars per chunk
+    MinChunkSize      int     `json:"minChunkSize"`      // Min chars per chunk
+    PreserveStructure bool    `json:"preserveStructure"` // Keep logical units intact
+    SplitTables       bool    `json:"splitTables"`       // Allow table splitting
+    HeaderDetection   bool    `json:"headerDetection"`   // Detect repeating headers
+    FooterDetection   bool    `json:"footerDetection"`   // Detect repeating footers
+}
+
+// internal/pdf/chunking/layout_engine.go
+type LayoutAnalysisEngine struct {
+    fontAnalyzer    *FontAnalyzer
+    spacingAnalyzer *SpacingAnalyzer
+    indentDetector  *IndentationDetector
+}
+
+func (lae *LayoutAnalysisEngine) AnalyzeStructure(pages []ExtractedPage) (*DocumentStructure, error) {
+    // 1. Analyze font usage patterns
+    fontHierarchy := lae.fontAnalyzer.BuildFontHierarchy(pages)
+    
+    // 2. Detect heading levels based on font size/weight
+    headings := lae.detectHeadings(pages, fontHierarchy)
+    
+    // 3. Analyze spacing patterns
+    spacingPatterns := lae.spacingAnalyzer.AnalyzeSpacing(pages)
+    
+    // 4. Build document outline
+    outline := lae.buildDocumentOutline(headings, spacingPatterns)
+    
+    return &DocumentStructure{
+        Outline:         outline,
+        FontHierarchy:   fontHierarchy,
+        SpacingPatterns: spacingPatterns,
+    }, nil
+}
+
+// internal/pdf/chunking/chunk_builder.go
+type ChunkBuilder struct {
+    strategy ChunkingStrategy
+    merger   *ContentMerger
+}
+
+type ContentChunk struct {
+    ID            string              `json:"id"`
+    SequenceNum   int                `json:"sequenceNum"`
+    Type          ChunkType          `json:"type"`
+    Title         string             `json:"title,omitempty"`
+    Content       string             `json:"content"`
+    PageRange     PageRange          `json:"pageRange"`
+    StructureInfo StructuralElement  `json:"structureInfo"`
+    Metadata      ChunkMetadata      `json:"metadata"`
+    Previous      string             `json:"previous,omitempty"` // ID of previous chunk
+    Next          string             `json:"next,omitempty"`     // ID of next chunk
+}
+
+func (cb *ChunkBuilder) BuildChunks(structure *DocumentStructure, content []ExtractedContent) ([]ContentChunk, error) {
+    chunks := []ContentChunk{}
+    
+    // Process based on strategy
+    if cb.strategy.PreserveStructure {
+        // Chunk along structural boundaries
+        chunks = cb.chunkByStructure(structure, content)
+    } else {
+        // Chunk by size with smart splitting
+        chunks = cb.chunkBySize(content)
+    }
+    
+    // Post-process chunks
+    chunks = cb.handleOverflow(chunks)
+    chunks = cb.linkChunks(chunks)
+    
+    return chunks, nil
+}
+
+// internal/pdf/chunking/semantic_splitter.go
+type SemanticSplitter struct {
+    nlpAnalyzer *NLPAnalyzer
+    sentenceDetector *SentenceDetector
+}
+
+func (ss *SemanticSplitter) FindSplitPoints(text string, targetSize int) []int {
+    // 1. Detect sentence boundaries
+    sentences := ss.sentenceDetector.DetectSentences(text)
+    
+    // 2. Find paragraph boundaries
+    paragraphs := ss.findParagraphBoundaries(text)
+    
+    // 3. Score potential split points
+    splitScores := ss.scoreSplitPoints(text, sentences, paragraphs)
+    
+    // 4. Select optimal split points near target size
+    return ss.selectOptimalSplits(splitScores, targetSize)
+}
+
+// pkg/models/chunking.go
+type ChunkMetadata struct {
+    WordCount      int                 `json:"wordCount"`
+    CharCount      int                 `json:"charCount"`
+    HasTables      bool               `json:"hasTables"`
+    HasImages      bool               `json:"hasImages"`
+    HasFormFields  bool               `json:"hasFormFields"`
+    Language       string             `json:"language,omitempty"`
+    ReadingLevel   float64            `json:"readingLevel,omitempty"`
+    Keywords       []string           `json:"keywords,omitempty"`
+    CrossRefs      []CrossReference   `json:"crossRefs,omitempty"`
+}
+
+// internal/pdf/chunking/table_handler.go
+type TableChunkHandler struct {
+    tableDetector *TableDetector
+    tableSplitter *TableSplitter
+}
+
+func (tch *TableChunkHandler) HandleTableChunking(table *ExtractedTable, maxSize int) []TableChunk {
+    if !tch.shouldSplitTable(table, maxSize) {
+        return []TableChunk{{Table: table}}
+    }
+    
+    // Split table intelligently
+    splitPoints := tch.findTableSplitPoints(table)
+    return tch.tableSplitter.SplitTable(table, splitPoints)
+}
+
+// API endpoint implementation
+// internal/server/chunking_handler.go
+func (s *MCPServer) handleChunkPDF(params ChunkingParams) (*ChunkingResult, error) {
+    // Initialize chunking system
+    analyzer := chunking.NewContentAnalyzer(
+        s.streamParser,
+        chunking.ChunkingStrategy{
+            MaxChunkSize:      params.MaxChunkSize,
+            MinChunkSize:      params.MinChunkSize,
+            PreserveStructure: params.PreserveStructure,
+            SplitTables:       params.AllowTableSplit,
+        },
+    )
+    
+    // Analyze document structure
+    structure, err := analyzer.AnalyzeDocument(params.FilePath)
+    if err != nil {
+        return nil, fmt.Errorf("structure analysis failed: %w", err)
+    }
+    
+    // Generate chunks
+    chunks, err := analyzer.GenerateChunks(structure)
+    if err != nil {
+        return nil, fmt.Errorf("chunk generation failed: %w", err)
+    }
+    
+    return &ChunkingResult{
+        Chunks:    chunks,
+        Structure: structure,
+        Stats:     analyzer.GetStatistics(),
+    }, nil
+}
+
+# Test Strategy:
+Comprehensive testing strategy for intelligent PDF content chunking:
+
+1. **Structure Detection Tests**:
+   - Test with PDF specifications (PDF 1.4, PDF 1.7) that have clear chapter/section structure
+   - Verify correct detection of heading hierarchy based on font sizes
+   - Test with documents using various heading styles (numbered, unnumbered, mixed)
+   - Validate outline generation matches table of contents when present
+   - Test with documents lacking clear structure (novels, continuous text)
+
+2. **Chunking Algorithm Tests**:
+   - Test chunk size constraints are respected (min/max sizes)
+   - Verify chunks don't split in middle of sentences when possible
+   - Test paragraph boundary preservation
+   - Validate section boundary preservation when PreserveStructure is enabled
+   - Test handling of edge cases (very small sections, single large paragraph)
+
+3. **Semantic Splitting Tests**:
+   - Test sentence detection with various punctuation patterns
+   - Verify handling of abbreviations and special cases (Dr., Inc., etc.)
+   - Test with multi-language documents
+   - Validate split point scoring algorithm
+   - Test handling of bullet points and numbered lists
+
+4. **Table and Special Content Tests**:
+   - Test table detection and chunking with large tables
+   - Verify table splitting preserves headers when possible
+   - Test handling of images and captions
+   - Validate form field preservation in chunks
+   - Test mixed content (text + tables + images)
+
+5. **Performance and Memory Tests**:
+   - Benchmark chunking speed for documents of various sizes
+   - Test memory usage with streaming for large PDFs (100MB+)
+   - Verify chunking works efficiently with page-range extraction
+   - Test concurrent chunking of multiple documents
+
+6. **Integration Tests**:
+   - Test with real technical documentation (API specs, user manuals)
+   - Verify chunk linking (previous/next) is correct
+   - Test chunk metadata accuracy (word counts, cross-references)
+   - Validate chunk retrieval and reassembly
+   - Test with documents containing headers/footers
+
+7. **Edge Case Tests**:
+   - Test with PDFs having no text content
+   - Test with scanned PDFs (image-based)
+   - Test with encrypted or protected PDFs
+   - Test with malformed structure information
+   - Test with documents using non-standard fonts or encodings

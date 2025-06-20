@@ -1,0 +1,430 @@
+# Task ID: 41
+# Title: Implement Document Outline/Bookmarks Support
+# Status: pending
+# Dependencies: 2, 3, 34, 40
+# Priority: low
+# Description: Add support for parsing and navigating PDF document outlines (bookmarks) with proper hierarchy, destinations, and actions. Include support for both explicit and named destinations.
+# Details:
+Implement a comprehensive document outline/bookmarks system that supports the full PDF outline hierarchy according to PDF 1.4/1.7 specifications (Chapter 12.3):
+
+```go
+// internal/pdf/outlines/parser.go
+package outlines
+
+import (
+    "fmt"
+    "github.com/yourusername/pdfextract/internal/pdf/destinations"
+    "github.com/yourusername/pdfextract/internal/pdf/actions"
+)
+
+type OutlineParser struct {
+    resolver     ObjectResolver
+    destResolver destinations.DestinationResolver
+    actionParser actions.ActionParser
+}
+
+type OutlineItem struct {
+    Title       string           `json:"title"`
+    Dest        *Destination     `json:"dest,omitempty"`
+    Action      *actions.Action  `json:"action,omitempty"`
+    Parent      *OutlineItem     `json:"-"`
+    First       *OutlineItem     `json:"first,omitempty"`
+    Last        *OutlineItem     `json:"last,omitempty"`
+    Next        *OutlineItem     `json:"next,omitempty"`
+    Prev        *OutlineItem     `json:"-"`
+    Count       int              `json:"count"`
+    SE          *StructElement   `json:"se,omitempty"`
+    C           []float64        `json:"color,omitempty"`
+    F           int              `json:"flags,omitempty"`
+    Children    []*OutlineItem   `json:"children,omitempty"`
+}
+
+type Destination struct {
+    Type        DestinationType  `json:"type"`
+    Page        int              `json:"page"`
+    View        string           `json:"view"` // Fit, FitH, FitV, FitR, FitB, FitBH, FitBV, XYZ
+    Parameters  []float64        `json:"parameters,omitempty"`
+    NamedDest   string           `json:"namedDest,omitempty"`
+}
+
+type DestinationType int
+
+const (
+    ExplicitDest DestinationType = iota
+    NamedDest
+    RemoteDest
+)
+
+func (p *OutlineParser) ParseOutlines(catalog map[string]interface{}) (*OutlineItem, error) {
+    outlinesRef, ok := catalog["Outlines"]
+    if !ok {
+        return nil, nil // No outlines in document
+    }
+    
+    outlinesDict, err := p.resolver.ResolveObject(outlinesRef)
+    if err != nil {
+        return nil, fmt.Errorf("failed to resolve outlines: %w", err)
+    }
+    
+    // Parse the outline tree starting from First
+    firstRef, ok := outlinesDict["First"]
+    if !ok {
+        return nil, nil // Empty outline
+    }
+    
+    root := &OutlineItem{Title: "Document Outline"}
+    err = p.parseOutlineTree(firstRef, root, 0)
+    if err != nil {
+        return nil, err
+    }
+    
+    return root, nil
+}
+
+func (p *OutlineParser) parseOutlineTree(itemRef interface{}, parent *OutlineItem, depth int) error {
+    if depth > 100 { // Prevent infinite recursion
+        return fmt.Errorf("outline depth exceeded maximum")
+    }
+    
+    item, err := p.parseOutlineItem(itemRef)
+    if err != nil {
+        return err
+    }
+    
+    item.Parent = parent
+    if parent.Children == nil {
+        parent.Children = make([]*OutlineItem, 0)
+    }
+    parent.Children = append(parent.Children, item)
+    
+    // Parse children if present
+    if item.First != nil {
+        err = p.parseOutlineTree(item.First, item, depth+1)
+        if err != nil {
+            return err
+        }
+    }
+    
+    // Parse siblings
+    if item.Next != nil {
+        err = p.parseOutlineTree(item.Next, parent, depth)
+        if err != nil {
+            return err
+        }
+    }
+    
+    return nil
+}
+
+func (p *OutlineParser) parseOutlineItem(itemRef interface{}) (*OutlineItem, error) {
+    itemDict, err := p.resolver.ResolveObject(itemRef)
+    if err != nil {
+        return nil, err
+    }
+    
+    item := &OutlineItem{}
+    
+    // Extract title (required)
+    title, ok := itemDict["Title"].(string)
+    if !ok {
+        return nil, fmt.Errorf("outline item missing required Title")
+    }
+    item.Title = title
+    
+    // Extract destination or action
+    if dest, ok := itemDict["Dest"]; ok {
+        item.Dest, err = p.parseDestination(dest)
+        if err != nil {
+            return nil, fmt.Errorf("failed to parse destination: %w", err)
+        }
+    } else if action, ok := itemDict["A"]; ok {
+        item.Action, err = p.actionParser.ParseAction(action)
+        if err != nil {
+            return nil, fmt.Errorf("failed to parse action: %w", err)
+        }
+    }
+    
+    // Extract optional properties
+    if count, ok := itemDict["Count"].(int); ok {
+        item.Count = count
+    }
+    
+    if color, ok := itemDict["C"].([]interface{}); ok && len(color) == 3 {
+        item.C = make([]float64, 3)
+        for i, c := range color {
+            if f, ok := c.(float64); ok {
+                item.C[i] = f
+            }
+        }
+    }
+    
+    if flags, ok := itemDict["F"].(int); ok {
+        item.F = flags
+    }
+    
+    // Store references for tree building
+    item.First = itemDict["First"]
+    item.Last = itemDict["Last"]
+    item.Next = itemDict["Next"]
+    item.Prev = itemDict["Prev"]
+    
+    return item, nil
+}
+
+func (p *OutlineParser) parseDestination(dest interface{}) (*Destination, error) {
+    // Handle different destination formats
+    switch d := dest.(type) {
+    case string:
+        // Named destination
+        return &Destination{
+            Type:      NamedDest,
+            NamedDest: d,
+        }, nil
+        
+    case []interface{}:
+        // Explicit destination array
+        if len(d) < 2 {
+            return nil, fmt.Errorf("invalid destination array")
+        }
+        
+        pageRef := d[0]
+        pageNum, err := p.resolver.GetPageNumber(pageRef)
+        if err != nil {
+            return nil, err
+        }
+        
+        viewType, ok := d[1].(string)
+        if !ok {
+            return nil, fmt.Errorf("invalid view type in destination")
+        }
+        
+        dest := &Destination{
+            Type: ExplicitDest,
+            Page: pageNum,
+            View: viewType,
+        }
+        
+        // Extract view parameters based on type
+        switch viewType {
+        case "XYZ":
+            if len(d) >= 5 {
+                dest.Parameters = []float64{
+                    toFloat64(d[2]), // left
+                    toFloat64(d[3]), // top
+                    toFloat64(d[4]), // zoom
+                }
+            }
+        case "Fit", "FitB":
+            // No parameters
+        case "FitH", "FitBH":
+            if len(d) >= 3 {
+                dest.Parameters = []float64{toFloat64(d[2])} // top
+            }
+        case "FitV", "FitBV":
+            if len(d) >= 3 {
+                dest.Parameters = []float64{toFloat64(d[2])} // left
+            }
+        case "FitR":
+            if len(d) >= 6 {
+                dest.Parameters = []float64{
+                    toFloat64(d[2]), // left
+                    toFloat64(d[3]), // bottom
+                    toFloat64(d[4]), // right
+                    toFloat64(d[5]), // top
+                }
+            }
+        }
+        
+        return dest, nil
+        
+    case map[string]interface{}:
+        // Remote destination dictionary
+        return p.parseRemoteDestination(d)
+        
+    default:
+        return nil, fmt.Errorf("unsupported destination type: %T", dest)
+    }
+}
+
+// internal/pdf/outlines/named_destinations.go
+type NamedDestinationResolver struct {
+    catalog  map[string]interface{}
+    resolver ObjectResolver
+    cache    map[string]*Destination
+}
+
+func (r *NamedDestinationResolver) ResolveNamedDestination(name string) (*Destination, error) {
+    if cached, ok := r.cache[name]; ok {
+        return cached, nil
+    }
+    
+    // Check Dests dictionary in catalog
+    if dests, ok := r.catalog["Dests"]; ok {
+        if destDict, err := r.resolver.ResolveObject(dests); err == nil {
+            if dest, ok := destDict[name]; ok {
+                resolved, err := r.parseDestination(dest)
+                if err == nil {
+                    r.cache[name] = resolved
+                    return resolved, nil
+                }
+            }
+        }
+    }
+    
+    // Check Names tree
+    if names, ok := r.catalog["Names"]; ok {
+        if namesDict, err := r.resolver.ResolveObject(names); err == nil {
+            if destsTree, ok := namesDict["Dests"]; ok {
+                dest, err := r.searchNameTree(destsTree, name)
+                if err == nil && dest != nil {
+                    r.cache[name] = dest
+                    return dest, nil
+                }
+            }
+        }
+    }
+    
+    return nil, fmt.Errorf("named destination not found: %s", name)
+}
+
+// internal/pdf/outlines/api.go
+type OutlineAPI struct {
+    parser   *OutlineParser
+    resolver *NamedDestinationResolver
+}
+
+func (api *OutlineAPI) GetOutlineTree(catalog map[string]interface{}) (*OutlineItem, error) {
+    return api.parser.ParseOutlines(catalog)
+}
+
+func (api *OutlineAPI) FlattenOutline(root *OutlineItem) []*FlatOutlineEntry {
+    entries := make([]*FlatOutlineEntry, 0)
+    api.flattenRecursive(root, 0, &entries)
+    return entries
+}
+
+type FlatOutlineEntry struct {
+    Title       string       `json:"title"`
+    Level       int          `json:"level"`
+    Page        int          `json:"page,omitempty"`
+    Destination *Destination `json:"destination,omitempty"`
+    Action      interface{}  `json:"action,omitempty"`
+    Color       []float64    `json:"color,omitempty"`
+    Style       string       `json:"style,omitempty"`
+}
+
+func (api *OutlineAPI) flattenRecursive(item *OutlineItem, level int, entries *[]*FlatOutlineEntry) {
+    if item == nil || item.Title == "" {
+        return
+    }
+    
+    entry := &FlatOutlineEntry{
+        Title: item.Title,
+        Level: level,
+        Color: item.C,
+    }
+    
+    // Determine style from flags
+    if item.F&1 != 0 {
+        entry.Style = "italic"
+    }
+    if item.F&2 != 0 {
+        if entry.Style != "" {
+            entry.Style += ",bold"
+        } else {
+            entry.Style = "bold"
+        }
+    }
+    
+    // Resolve destination
+    if item.Dest != nil {
+        entry.Destination = item.Dest
+        if item.Dest.Type == NamedDest {
+            resolved, err := api.resolver.ResolveNamedDestination(item.Dest.NamedDest)
+            if err == nil {
+                entry.Destination = resolved
+                entry.Page = resolved.Page
+            }
+        } else {
+            entry.Page = item.Dest.Page
+        }
+    } else if item.Action != nil {
+        entry.Action = item.Action
+        // Extract page from GoTo action if present
+        if goTo, ok := item.Action.(*actions.GoToAction); ok && goTo.Dest != nil {
+            entry.Page = goTo.Dest.Page
+        }
+    }
+    
+    *entries = append(*entries, entry)
+    
+    // Process children
+    for _, child := range item.Children {
+        api.flattenRecursive(child, level+1, entries)
+    }
+}
+
+// Helper function
+func toFloat64(v interface{}) float64 {
+    switch val := v.(type) {
+    case float64:
+        return val
+    case int:
+        return float64(val)
+    case nil:
+        return 0
+    default:
+        return 0
+    }
+}
+```
+
+# Test Strategy:
+Comprehensive testing strategy for document outline/bookmarks support:
+
+1. **Basic Outline Parsing Tests**:
+   - Test with PDFs containing simple linear outline structures
+   - Verify correct parsing of outline items with Title, Dest, and Action
+   - Test with nested outline hierarchies (multiple levels)
+   - Validate parent-child relationships in outline tree
+   - Test with empty outlines dictionary
+
+2. **Destination Handling Tests**:
+   - Test explicit destinations with all view types (XYZ, Fit, FitH, FitV, FitR, FitB, FitBH, FitBV)
+   - Verify correct parameter extraction for each view type
+   - Test named destinations with Dests dictionary lookup
+   - Test named destinations with Names tree lookup
+   - Test remote destinations (GoToR actions)
+   - Verify page number resolution for all destination types
+
+3. **Complex Outline Tests**:
+   - Test with PDF specifications that have deep outline hierarchies
+   - Verify Count field handling (positive for open, negative for closed)
+   - Test color (C) array parsing for colored bookmarks
+   - Test flags (F) for italic (1) and bold (2) styling
+   - Test outline items with both Dest and A (action should take precedence)
+
+4. **Tree Navigation Tests**:
+   - Test First/Last/Next/Prev reference following
+   - Verify circular reference detection
+   - Test maximum depth protection (prevent stack overflow)
+   - Validate sibling relationships in outline tree
+
+5. **Integration Tests**:
+   - Test outline extraction with real PDF documents
+   - Verify flattened outline generation with correct levels
+   - Test outline navigation to actual page destinations
+   - Validate action execution from outline items
+   - Test with PDFs from different generators (Adobe, LibreOffice, etc.)
+
+6. **Error Handling Tests**:
+   - Test with malformed outline dictionaries
+   - Test with invalid destination arrays
+   - Test with missing required fields (Title)
+   - Test with broken object references
+   - Verify graceful handling of corrupted outline structures
+
+7. **Performance Tests**:
+   - Benchmark outline parsing for documents with 1000+ bookmarks
+   - Test memory usage with deeply nested outlines
+   - Verify efficient caching of named destination lookups

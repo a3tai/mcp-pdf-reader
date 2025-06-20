@@ -1,0 +1,327 @@
+# Task ID: 43
+# Title: Fix Critical Server Crashes in PDF Extraction Commands
+# Status: pending
+# Dependencies: 2, 3, 4, 6, 42
+# Priority: high
+# Description: Add comprehensive panic recovery, timeout handling, and memory management to the pdf_extract_complete and pdf_extract_semantic commands to prevent server crashes and timeouts that make the server unstable and unusable.
+# Details:
+Implement critical stability fixes for the PDF extraction commands that are causing server crashes:
+
+```go
+// internal/tools/pdf_extract_complete.go
+package tools
+
+import (
+    "context"
+    "runtime"
+    "runtime/debug"
+    "sync"
+    "time"
+    "github.com/yourusername/pdfextract/internal/pdf/errors"
+)
+
+type PDFExtractComplete struct {
+    memoryMonitor *MemoryMonitor
+    panicHandler  *PanicRecoveryHandler
+    timeout       time.Duration
+}
+
+// Wrap extraction with panic recovery
+func (p *PDFExtractComplete) ExtractWithRecovery(ctx context.Context, path string) (result interface{}, err error) {
+    // Set memory limit to prevent OOM
+    runtime.MemoryLimit(2 * 1024 * 1024 * 1024) // 2GB limit
+    
+    // Defer panic recovery
+    defer func() {
+        if r := recover(); r != nil {
+            err = &errors.PDFError{
+                Type:       errors.ErrorTypePanic,
+                Message:    fmt.Sprintf("Panic during extraction: %v", r),
+                StackTrace: string(debug.Stack()),
+                Recoverable: false,
+            }
+            // Log panic details
+            p.panicHandler.LogPanic(r, debug.Stack())
+        }
+    }()
+    
+    // Create timeout context
+    timeoutCtx, cancel := context.WithTimeout(ctx, p.timeout)
+    defer cancel()
+    
+    // Monitor memory usage
+    stopMonitor := p.memoryMonitor.Start(timeoutCtx)
+    defer stopMonitor()
+    
+    // Run extraction in goroutine with result channel
+    type extractResult struct {
+        data interface{}
+        err  error
+    }
+    
+    resultChan := make(chan extractResult, 1)
+    
+    go func() {
+        defer func() {
+            if r := recover(); r != nil {
+                resultChan <- extractResult{
+                    err: fmt.Errorf("extraction panic: %v", r),
+                }
+            }
+        }()
+        
+        data, err := p.performExtraction(timeoutCtx, path)
+        resultChan <- extractResult{data: data, err: err}
+    }()
+    
+    // Wait for result or timeout
+    select {
+    case res := <-resultChan:
+        return res.data, res.err
+    case <-timeoutCtx.Done():
+        return nil, fmt.Errorf("extraction timeout after %v", p.timeout)
+    }
+}
+
+// Memory monitoring to prevent OOM
+type MemoryMonitor struct {
+    threshold   uint64
+    checkPeriod time.Duration
+    mu          sync.RWMutex
+}
+
+func (m *MemoryMonitor) Start(ctx context.Context) func() {
+    done := make(chan struct{})
+    
+    go func() {
+        ticker := time.NewTicker(m.checkPeriod)
+        defer ticker.Stop()
+        
+        for {
+            select {
+            case <-ticker.C:
+                var memStats runtime.MemStats
+                runtime.ReadMemStats(&memStats)
+                
+                if memStats.Alloc > m.threshold {
+                    // Force GC and check again
+                    runtime.GC()
+                    runtime.ReadMemStats(&memStats)
+                    
+                    if memStats.Alloc > m.threshold {
+                        panic(fmt.Sprintf("memory threshold exceeded: %d > %d", memStats.Alloc, m.threshold))
+                    }
+                }
+            case <-ctx.Done():
+                return
+            case <-done:
+                return
+            }
+        }
+    }()
+    
+    return func() { close(done) }
+}
+
+// internal/tools/pdf_extract_semantic.go
+// Similar implementation for semantic extraction with additional safeguards
+
+type PDFExtractSemantic struct {
+    extractor     *SemanticExtractor
+    memoryMonitor *MemoryMonitor
+    panicHandler  *PanicRecoveryHandler
+    timeout       time.Duration
+    maxFileSize   int64
+}
+
+func (p *PDFExtractSemantic) ExtractWithRecovery(ctx context.Context, path string) (result interface{}, err error) {
+    // Check file size before processing
+    fileInfo, err := os.Stat(path)
+    if err != nil {
+        return nil, fmt.Errorf("failed to stat file: %w", err)
+    }
+    
+    if fileInfo.Size() > p.maxFileSize {
+        return nil, fmt.Errorf("file too large: %d bytes (max: %d)", fileInfo.Size(), p.maxFileSize)
+    }
+    
+    // Use streaming parser for large files
+    if fileInfo.Size() > 100*1024*1024 { // 100MB
+        return p.extractStreamingWithRecovery(ctx, path)
+    }
+    
+    // Standard extraction with recovery (similar to complete extraction)
+    // ... implementation similar to PDFExtractComplete
+}
+
+// Streaming extraction for large files
+func (p *PDFExtractSemantic) extractStreamingWithRecovery(ctx context.Context, path string) (interface{}, error) {
+    // Open file with limited buffer
+    file, err := os.Open(path)
+    if err != nil {
+        return nil, err
+    }
+    defer file.Close()
+    
+    // Use buffered reader with size limit
+    reader := bufio.NewReaderSize(file, 64*1024) // 64KB buffer
+    
+    // Process in chunks with periodic memory checks
+    chunkSize := 10 * 1024 * 1024 // 10MB chunks
+    buffer := make([]byte, chunkSize)
+    
+    var results []interface{}
+    
+    for {
+        select {
+        case <-ctx.Done():
+            return nil, ctx.Err()
+        default:
+            // Check memory before processing chunk
+            var memStats runtime.MemStats
+            runtime.ReadMemStats(&memStats)
+            if memStats.Alloc > p.memoryMonitor.threshold {
+                runtime.GC()
+                runtime.ReadMemStats(&memStats)
+                if memStats.Alloc > p.memoryMonitor.threshold {
+                    return nil, fmt.Errorf("memory limit exceeded during streaming")
+                }
+            }
+            
+            n, err := reader.Read(buffer)
+            if err == io.EOF {
+                break
+            }
+            if err != nil {
+                return nil, fmt.Errorf("read error: %w", err)
+            }
+            
+            // Process chunk with panic recovery
+            chunkResult, err := p.processChunkWithRecovery(buffer[:n])
+            if err != nil {
+                // Log error but continue processing
+                p.panicHandler.LogError(err)
+                continue
+            }
+            
+            results = append(results, chunkResult)
+        }
+    }
+    
+    return p.mergeResults(results), nil
+}
+
+// Panic recovery handler with logging
+type PanicRecoveryHandler struct {
+    logger     Logger
+    maxPanics  int
+    panicCount int
+    mu         sync.Mutex
+}
+
+func (h *PanicRecoveryHandler) RecoverWithLogging(operation string) {
+    if r := recover(); r != nil {
+        h.mu.Lock()
+        h.panicCount++
+        count := h.panicCount
+        h.mu.Unlock()
+        
+        stack := debug.Stack()
+        h.logger.Error("Panic recovered in %s: %v\nStack: %s", operation, r, stack)
+        
+        // If too many panics, stop processing
+        if count > h.maxPanics {
+            panic(fmt.Sprintf("too many panics (%d), aborting", count))
+        }
+    }
+}
+
+// Resource cleanup helper
+type ResourceManager struct {
+    resources []io.Closer
+    mu        sync.Mutex
+}
+
+func (r *ResourceManager) Add(resource io.Closer) {
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    r.resources = append(r.resources, resource)
+}
+
+func (r *ResourceManager) CleanupAll() {
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    
+    for _, resource := range r.resources {
+        if resource != nil {
+            resource.Close()
+        }
+    }
+    r.resources = nil
+}
+
+// Update MCP server to use safe extraction
+// internal/server/mcp.go
+func (s *MCPServer) CallTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, error) {
+    // Wrap all tool calls with panic recovery
+    defer func() {
+        if r := recover(); r != nil {
+            s.logger.Error("Tool %s panicked: %v", name, r)
+            // Return error instead of crashing server
+            err = fmt.Errorf("tool execution failed: %v", r)
+        }
+    }()
+    
+    switch name {
+    case "pdf_extract_complete":
+        return s.pdfExtractComplete.ExtractWithRecovery(ctx, args["path"].(string))
+    case "pdf_extract_semantic":
+        return s.pdfExtractSemantic.ExtractWithRecovery(ctx, args["path"].(string))
+    default:
+        return s.callToolNormal(ctx, name, args)
+    }
+}
+
+# Test Strategy:
+Comprehensive testing strategy for server crash fixes:
+
+1. **Panic Recovery Tests**:
+   - Create PDFs that trigger known panics (corrupted streams, invalid objects, circular references)
+   - Verify server continues running after panic recovery
+   - Test nested panic scenarios
+   - Validate error messages contain useful debugging information
+   - Test with concurrent extraction requests that panic
+
+2. **Timeout Handling Tests**:
+   - Test with PDFs that have extremely complex content streams
+   - Create PDFs with infinite loops in content parsing
+   - Verify timeout cancels extraction cleanly
+   - Test different timeout values (1s, 10s, 60s)
+   - Ensure partial results are not returned on timeout
+
+3. **Memory Management Tests**:
+   - Test with very large PDFs (500MB+)
+   - Create PDFs with thousands of embedded images
+   - Monitor memory usage during extraction
+   - Verify GC is triggered when threshold approached
+   - Test streaming mode activation for large files
+   - Ensure memory is released after extraction
+
+4. **Stress Testing**:
+   - Run 100 concurrent extractions with mixed PDF types
+   - Include PDFs known to cause issues
+   - Monitor server stability over extended periods
+   - Test with limited memory (e.g., 512MB container)
+   - Verify no memory leaks after repeated extractions
+
+5. **Resource Cleanup Tests**:
+   - Verify all file handles are closed after extraction
+   - Test cleanup on panic, timeout, and normal completion
+   - Monitor open file descriptors during testing
+   - Test with read-only and locked files
+
+6. **Integration Tests**:
+   - Test through MCP protocol with real client
+   - Verify error responses are properly formatted
+   - Test server recovery after tool failure
+   - Ensure other tools remain functional after crash

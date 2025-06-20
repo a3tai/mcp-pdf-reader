@@ -1,0 +1,480 @@
+# Task ID: 34
+# Title: Implement Cross-Reference Table Parser for Random Access
+# Status: done
+# Dependencies: 2, 3
+# Priority: high
+# Description: Build proper xref table parsing to support random access to PDF objects, handle incremental updates with Prev chain, and implement proper object resolution. This is fundamental to PDF compliance and currently missing from our basic sequential parsing approach.
+# Details:
+Implement a comprehensive cross-reference table parser that supports all PDF xref formats and enables efficient random access to objects:
+
+```go
+// internal/pdf/xref/parser.go
+package xref
+
+import (
+    "bufio"
+    "fmt"
+    "io"
+    "strconv"
+    "strings"
+)
+
+type XRefParser struct {
+    reader      io.ReadSeeker
+    entries     map[int]map[int]*XRefEntry // objNum -> generation -> entry
+    trailers    []*TrailerDict              // Chain of trailers for incremental updates
+    startxref   int64                       // Offset to main xref
+    prevChain   []int64                     // Chain of previous xref offsets
+}
+
+type XRefEntry struct {
+    Type       EntryType // Free, InUse, Compressed
+    Offset     int64     // Byte offset for InUse, or object stream number for Compressed
+    Generation int       // Generation number (0 for compressed)
+    StreamIndex int      // Index within object stream (for compressed objects)
+}
+
+type EntryType int
+const (
+    EntryFree EntryType = iota
+    EntryInUse
+    EntryCompressed
+)
+
+type TrailerDict struct {
+    Size   int              // Total number of entries
+    Prev   *int64           // Offset to previous xref (for incremental updates)
+    Root   *IndirectRef     // Catalog dictionary
+    Encrypt *IndirectRef    // Encryption dictionary
+    Info   *IndirectRef     // Info dictionary
+    ID     [][]byte         // File identifiers
+}
+
+// ParseXRef parses all cross-reference sections starting from startxref
+func (p *XRefParser) ParseXRef(startxref int64) error {
+    p.startxref = startxref
+    p.entries = make(map[int]map[int]*XRefEntry)
+    
+    // Follow the Prev chain to parse all xref sections
+    offset := startxref
+    for offset > 0 {
+        p.prevChain = append(p.prevChain, offset)
+        
+        if _, err := p.reader.Seek(offset, io.SeekStart); err != nil {
+            return fmt.Errorf("seek to xref at %d: %w", offset, err)
+        }
+        
+        // Check if it's a cross-reference stream or table
+        buf := make([]byte, 20)
+        n, _ := p.reader.Read(buf)
+        p.reader.Seek(offset, io.SeekStart) // Reset position
+        
+        var trailer *TrailerDict
+        var err error
+        
+        if strings.Contains(string(buf[:n]), "xref") {
+            trailer, err = p.parseXRefTable()
+        } else {
+            trailer, err = p.parseXRefStream()
+        }
+        
+        if err != nil {
+            return fmt.Errorf("parse xref at %d: %w", offset, err)
+        }
+        
+        p.trailers = append(p.trailers, trailer)
+        
+        // Continue with previous xref if exists
+        if trailer.Prev != nil {
+            offset = *trailer.Prev
+        } else {
+            offset = 0
+        }
+    }
+    
+    return nil
+}
+
+// parseXRefTable handles traditional cross-reference tables
+func (p *XRefParser) parseXRefTable() (*TrailerDict, error) {
+    scanner := bufio.NewScanner(p.reader)
+    
+    // Read "xref" keyword
+    if !scanner.Scan() || scanner.Text() != "xref" {
+        return nil, fmt.Errorf("expected 'xref' keyword")
+    }
+    
+    // Parse subsections
+    for scanner.Scan() {
+        line := scanner.Text()
+        if line == "trailer" {
+            break
+        }
+        
+        // Parse subsection header: "start count"
+        parts := strings.Fields(line)
+        if len(parts) != 2 {
+            return nil, fmt.Errorf("invalid xref subsection header: %s", line)
+        }
+        
+        start, _ := strconv.Atoi(parts[0])
+        count, _ := strconv.Atoi(parts[1])
+        
+        // Read entries
+        for i := 0; i < count; i++ {
+            if !scanner.Scan() {
+                return nil, fmt.Errorf("unexpected EOF in xref table")
+            }
+            
+            entry, err := p.parseXRefEntry(scanner.Text())
+            if err != nil {
+                return nil, err
+            }
+            
+            objNum := start + i
+            if p.entries[objNum] == nil {
+                p.entries[objNum] = make(map[int]*XRefEntry)
+            }
+            p.entries[objNum][entry.Generation] = entry
+        }
+    }
+    
+    // Parse trailer dictionary
+    return p.parseTrailer()
+}
+
+// parseXRefStream handles cross-reference streams (PDF 1.5+)
+func (p *XRefParser) parseXRefStream() (*TrailerDict, error) {
+    // Parse the stream object
+    obj, err := p.parseIndirectObject()
+    if err != nil {
+        return nil, fmt.Errorf("parse xref stream object: %w", err)
+    }
+    
+    stream, ok := obj.(*StreamObject)
+    if !ok {
+        return nil, fmt.Errorf("expected stream object for xref stream")
+    }
+    
+    // Decode stream data
+    data, err := stream.Decode()
+    if err != nil {
+        return nil, fmt.Errorf("decode xref stream: %w", err)
+    }
+    
+    // Parse W array for field widths
+    w, err := stream.Dict.GetIntArray("W")
+    if err != nil || len(w) != 3 {
+        return nil, fmt.Errorf("invalid W array in xref stream")
+    }
+    
+    // Parse Index array for subsections
+    index := stream.Dict.GetIntArray("Index")
+    if len(index) == 0 {
+        // Default: single subsection starting at 0
+        size := stream.Dict.GetInt("Size")
+        index = []int{0, size}
+    }
+    
+    // Parse entries from decoded stream
+    entrySize := w[0] + w[1] + w[2]
+    offset := 0
+    
+    for i := 0; i < len(index); i += 2 {
+        start := index[i]
+        count := index[i+1]
+        
+        for j := 0; j < count; j++ {
+            if offset+entrySize > len(data) {
+                return nil, fmt.Errorf("xref stream data underflow")
+            }
+            
+            entry := p.parseXRefStreamEntry(data[offset:offset+entrySize], w)
+            objNum := start + j
+            
+            if p.entries[objNum] == nil {
+                p.entries[objNum] = make(map[int]*XRefEntry)
+            }
+            p.entries[objNum][entry.Generation] = entry
+            
+            offset += entrySize
+        }
+    }
+    
+    // Extract trailer info from stream dictionary
+    return p.extractTrailerFromStream(stream.Dict), nil
+}
+
+// ResolveObject finds and returns the offset/location of an object
+func (p *XRefParser) ResolveObject(objNum, generation int) (*XRefEntry, error) {
+    objEntries, exists := p.entries[objNum]
+    if !exists {
+        return nil, fmt.Errorf("object %d not found in xref", objNum)
+    }
+    
+    // For compressed objects, generation is always 0
+    if generation == 0 {
+        // Check for compressed entry first
+        for _, entry := range objEntries {
+            if entry.Type == EntryCompressed {
+                return entry, nil
+            }
+        }
+    }
+    
+    entry, exists := objEntries[generation]
+    if !exists {
+        return nil, fmt.Errorf("object %d generation %d not found", objNum, generation)
+    }
+    
+    if entry.Type == EntryFree {
+        return nil, fmt.Errorf("object %d generation %d is free", objNum, generation)
+    }
+    
+    return entry, nil
+}
+
+// GetLatestGeneration returns the latest generation number for an object
+func (p *XRefParser) GetLatestGeneration(objNum int) (int, error) {
+    objEntries, exists := p.entries[objNum]
+    if !exists {
+        return 0, fmt.Errorf("object %d not found", objNum)
+    }
+    
+    maxGen := -1
+    for gen, entry := range objEntries {
+        if entry.Type != EntryFree && gen > maxGen {
+            maxGen = gen
+        }
+    }
+    
+    if maxGen == -1 {
+        return 0, fmt.Errorf("no valid generation for object %d", objNum)
+    }
+    
+    return maxGen, nil
+}
+```
+
+Implement object resolution with support for compressed object streams:
+
+```go
+// internal/pdf/xref/resolver.go
+package xref
+
+type ObjectResolver struct {
+    parser       *XRefParser
+    reader       io.ReadSeeker
+    objectCache  map[string]PDFObject      // "objNum:gen" -> object
+    streamCache  map[int]*ObjectStream     // Object stream cache
+}
+
+type ObjectStream struct {
+    First   int                    // First object offset
+    N       int                    // Number of objects
+    Objects map[int]PDFObject      // Parsed objects by number
+}
+
+// ResolveObject retrieves an object by reference
+func (r *ObjectResolver) ResolveObject(ref IndirectRef) (PDFObject, error) {
+    // Check cache first
+    key := fmt.Sprintf("%d:%d", ref.ObjNum, ref.Generation)
+    if obj, exists := r.objectCache[key]; exists {
+        return obj, nil
+    }
+    
+    // Get xref entry
+    entry, err := r.parser.ResolveObject(ref.ObjNum, ref.Generation)
+    if err != nil {
+        return nil, err
+    }
+    
+    var obj PDFObject
+    
+    switch entry.Type {
+    case EntryInUse:
+        // Seek to object offset
+        if _, err := r.reader.Seek(entry.Offset, io.SeekStart); err != nil {
+            return nil, fmt.Errorf("seek to object: %w", err)
+        }
+        
+        // Parse indirect object
+        obj, err = r.parseIndirectObject(ref.ObjNum, ref.Generation)
+        if err != nil {
+            return nil, err
+        }
+        
+    case EntryCompressed:
+        // Load from object stream
+        obj, err = r.loadFromObjectStream(entry.Offset, entry.StreamIndex, ref.ObjNum)
+        if err != nil {
+            return nil, err
+        }
+    }
+    
+    // Cache the object
+    r.objectCache[key] = obj
+    return obj, nil
+}
+
+// loadFromObjectStream extracts an object from a compressed object stream
+func (r *ObjectResolver) loadFromObjectStream(streamObjNum int64, index int, targetObjNum int) (PDFObject, error) {
+    // Check stream cache
+    stream, exists := r.streamCache[int(streamObjNum)]
+    if !exists {
+        // Load and parse the object stream
+        streamRef := IndirectRef{ObjNum: int(streamObjNum), Generation: 0}
+        streamObj, err := r.ResolveObject(streamRef)
+        if err != nil {
+            return nil, fmt.Errorf("load object stream %d: %w", streamObjNum, err)
+        }
+        
+        stream, err = r.parseObjectStream(streamObj.(*StreamObject))
+        if err != nil {
+            return nil, err
+        }
+        
+        r.streamCache[int(streamObjNum)] = stream
+    }
+    
+    obj, exists := stream.Objects[targetObjNum]
+    if !exists {
+        return nil, fmt.Errorf("object %d not found in stream %d", targetObjNum, streamObjNum)
+    }
+    
+    return obj, nil
+}
+```
+
+Implement hybrid parsing strategy for optimal performance:
+
+```go
+// internal/pdf/xref/hybrid_parser.go
+package xref
+
+type HybridParser struct {
+    xrefParser   *XRefParser
+    resolver     *ObjectResolver
+    linearized   bool
+    hint         *HintTable    // For linearized PDFs
+}
+
+// Initialize performs initial PDF analysis
+func (h *HybridParser) Initialize(reader io.ReadSeeker) error {
+    // Check for linearization
+    h.linearized = h.checkLinearization(reader)
+    
+    // Find and parse xref
+    startxref, err := h.findStartXRef(reader)
+    if err != nil {
+        return err
+    }
+    
+    h.xrefParser = &XRefParser{reader: reader}
+    if err := h.xrefParser.ParseXRef(startxref); err != nil {
+        return err
+    }
+    
+    h.resolver = &ObjectResolver{
+        parser: h.xrefParser,
+        reader: reader,
+        objectCache: make(map[string]PDFObject),
+        streamCache: make(map[int]*ObjectStream),
+    }
+    
+    // Parse hint table for linearized PDFs
+    if h.linearized {
+        h.hint, _ = h.parseHintTable()
+    }
+    
+    return nil
+}
+
+// findStartXRef locates the startxref offset from EOF
+func (h *HybridParser) findStartXRef(reader io.ReadSeeker) (int64, error) {
+    // Seek to end of file
+    size, err := reader.Seek(0, io.SeekEnd)
+    if err != nil {
+        return 0, err
+    }
+    
+    // Read last 1KB (should contain startxref)
+    bufSize := int64(1024)
+    if size < bufSize {
+        bufSize = size
+    }
+    
+    reader.Seek(-bufSize, io.SeekEnd)
+    buf := make([]byte, bufSize)
+    reader.Read(buf)
+    
+    // Find startxref keyword
+    idx := bytes.LastIndex(buf, []byte("startxref"))
+    if idx == -1 {
+        return 0, fmt.Errorf("startxref not found")
+    }
+    
+    // Parse the offset
+    scanner := bufio.NewScanner(bytes.NewReader(buf[idx+9:]))
+    scanner.Scan() // Skip "startxref"
+    scanner.Scan() // Get offset
+    
+    offset, err := strconv.ParseInt(scanner.Text(), 10, 64)
+    if err != nil {
+        return 0, fmt.Errorf("parse startxref offset: %w", err)
+    }
+    
+    return offset, nil
+}
+```
+
+# Test Strategy:
+Comprehensive testing strategy for cross-reference table parser:
+
+1. **Basic xref table parsing tests**:
+   - Test with simple PDF containing single xref table
+   - Verify correct parsing of xref entries (offset, generation, type)
+   - Test with multiple subsections in single xref table
+   - Validate trailer dictionary parsing
+
+2. **Cross-reference stream tests (PDF 1.5+)**:
+   - Test parsing of compressed xref streams
+   - Verify correct decoding with different W array configurations
+   - Test Index array handling for non-contiguous object numbers
+   - Validate stream dictionary trailer extraction
+
+3. **Incremental update tests**:
+   - Create PDFs with multiple xref sections linked by Prev
+   - Verify correct parsing of entire Prev chain
+   - Test that newer entries override older ones
+   - Validate proper trailer chain handling
+
+4. **Object resolution tests**:
+   - Test resolution of regular objects via byte offset
+   - Test resolution of compressed objects in object streams
+   - Verify generation number handling
+   - Test cache effectiveness with repeated lookups
+
+5. **Error handling tests**:
+   - Test with corrupted xref tables
+   - Test with missing startxref
+   - Test with invalid xref entries
+   - Verify graceful handling of circular Prev references
+
+6. **Performance benchmarks**:
+   - Measure xref parsing time for large PDFs (1000+ objects)
+   - Test memory usage with extensive object caching
+   - Benchmark random access vs sequential access patterns
+   - Compare performance with and without object stream caching
+
+7. **Compatibility tests**:
+   - Test with PDF 1.4 (traditional xref only)
+   - Test with PDF 1.5+ (xref streams)
+   - Test with linearized PDFs
+   - Test with encrypted PDFs (xref remains unencrypted)
+
+8. **Integration tests**:
+   - Test with real-world PDFs from various sources
+   - Verify compatibility with existing parser components
+   - Test object resolution through multiple layers of references
+   - Validate proper cleanup of resources

@@ -1,0 +1,338 @@
+# Task ID: 39
+# Title: Implement Comprehensive Annotation Support
+# Status: pending
+# Dependencies: 2, 3, 4, 12, 34, 36
+# Priority: medium
+# Description: Add support for all standard PDF annotation types including Text, Link, FreeText, Line, Square, Circle, Polygon, Highlight, Underline, Squiggly, StrikeOut, Stamp, Caret, Ink, Popup, FileAttachment, Sound, Movie, Widget, and 3D annotations with proper rendering and interaction.
+# Details:
+Implement a comprehensive annotation system that supports all PDF annotation types according to PDF 1.4/1.7 specifications (Chapter 12.5):
+
+```go
+// internal/pdf/annotations/types.go
+package annotations
+
+import (
+    "time"
+    "github.com/yourusername/pdfextract/internal/pdf/appearance"
+    "github.com/yourusername/pdfextract/internal/pdf/actions"
+)
+
+type AnnotationType string
+
+const (
+    TypeText           AnnotationType = "Text"
+    TypeLink           AnnotationType = "Link"
+    TypeFreeText       AnnotationType = "FreeText"
+    TypeLine           AnnotationType = "Line"
+    TypeSquare         AnnotationType = "Square"
+    TypeCircle         AnnotationType = "Circle"
+    TypePolygon        AnnotationType = "Polygon"
+    TypePolyLine       AnnotationType = "PolyLine"
+    TypeHighlight      AnnotationType = "Highlight"
+    TypeUnderline      AnnotationType = "Underline"
+    TypeSquiggly       AnnotationType = "Squiggly"
+    TypeStrikeOut      AnnotationType = "StrikeOut"
+    TypeStamp          AnnotationType = "Stamp"
+    TypeCaret          AnnotationType = "Caret"
+    TypeInk            AnnotationType = "Ink"
+    TypePopup          AnnotationType = "Popup"
+    TypeFileAttachment AnnotationType = "FileAttachment"
+    TypeSound          AnnotationType = "Sound"
+    TypeMovie          AnnotationType = "Movie"
+    TypeWidget         AnnotationType = "Widget"
+    Type3D             AnnotationType = "3D"
+)
+
+// Base annotation interface
+type Annotation interface {
+    Type() AnnotationType
+    GetRect() Rectangle
+    GetAppearance() *appearance.AppearanceStream
+    GetFlags() AnnotationFlags
+    GetModificationDate() time.Time
+    Render(context *RenderContext) error
+}
+
+// Common annotation properties
+type BaseAnnotation struct {
+    Subtype   AnnotationType        `json:"subtype"`
+    Rect      Rectangle            `json:"rect"`
+    Contents  string               `json:"contents,omitempty"`
+    P         *PageReference       `json:"page,omitempty"`
+    NM        string               `json:"name,omitempty"`
+    M         time.Time            `json:"modDate,omitempty"`
+    F         AnnotationFlags      `json:"flags"`
+    AP        *AppearanceDictionary `json:"appearance,omitempty"`
+    AS        string               `json:"appearanceState,omitempty"`
+    Border    []float64            `json:"border,omitempty"`
+    C         []float64            `json:"color,omitempty"`
+    StructParent int               `json:"structParent,omitempty"`
+}
+
+// Specific annotation types
+type TextAnnotation struct {
+    BaseAnnotation
+    Open     bool   `json:"open"`
+    Name     string `json:"iconName"` // Comment, Key, Note, Help, etc.
+    State    string `json:"state,omitempty"`
+    StateModel string `json:"stateModel,omitempty"`
+}
+
+type LinkAnnotation struct {
+    BaseAnnotation
+    A           *actions.Action     `json:"action,omitempty"`
+    Dest        Destination         `json:"destination,omitempty"`
+    H           HighlightMode       `json:"highlightMode,omitempty"`
+    PA          *actions.URIAction  `json:"previousAction,omitempty"`
+    QuadPoints  []float64          `json:"quadPoints,omitempty"`
+}
+
+type FreeTextAnnotation struct {
+    BaseAnnotation
+    DA    string              `json:"defaultAppearance"`
+    Q     int                 `json:"quadding"`
+    RC    string              `json:"richText,omitempty"`
+    DS    string              `json:"defaultStyle,omitempty"`
+    CL    []float64          `json:"calloutLine,omitempty"`
+    IT    FreeTextIntent     `json:"intent,omitempty"`
+    BE    *BorderEffect      `json:"borderEffect,omitempty"`
+    RD    []float64          `json:"rectDifferences,omitempty"`
+    BS    *BorderStyle       `json:"borderStyle,omitempty"`
+    LE    LineEnding         `json:"lineEnding,omitempty"`
+}
+
+// Markup annotations (Highlight, Underline, etc.)
+type MarkupAnnotation struct {
+    BaseAnnotation
+    QuadPoints []float64 `json:"quadPoints"`
+    MarkupType AnnotationType `json:"markupType"`
+}
+
+// Geometric annotations
+type LineAnnotation struct {
+    BaseAnnotation
+    L       []float64      `json:"line"` // [x1, y1, x2, y2]
+    BS      *BorderStyle   `json:"borderStyle,omitempty"`
+    LE      []LineEnding   `json:"lineEndings,omitempty"`
+    IC      []float64      `json:"interiorColor,omitempty"`
+    LL      float64        `json:"leaderLine,omitempty"`
+    LLE     float64        `json:"leaderLineExtension,omitempty"`
+    Cap     bool           `json:"caption,omitempty"`
+    IT      LineIntent     `json:"intent,omitempty"`
+    LLO     float64        `json:"leaderLineOffset,omitempty"`
+    CP      CaptionPosition `json:"captionPosition,omitempty"`
+    Measure *MeasureDict   `json:"measure,omitempty"`
+    CO      []float64      `json:"captionOffset,omitempty"`
+}
+
+// internal/pdf/annotations/parser.go
+type AnnotationParser struct {
+    resolver ObjectResolver
+    pageRef  *PageReference
+}
+
+func (p *AnnotationParser) ParseAnnotation(dict map[string]Object) (Annotation, error) {
+    subtype, ok := dict["Subtype"].(Name)
+    if !ok {
+        return nil, fmt.Errorf("missing annotation subtype")
+    }
+    
+    base := p.parseBaseAnnotation(dict)
+    
+    switch AnnotationType(subtype) {
+    case TypeText:
+        return p.parseTextAnnotation(base, dict)
+    case TypeLink:
+        return p.parseLinkAnnotation(base, dict)
+    case TypeFreeText:
+        return p.parseFreeTextAnnotation(base, dict)
+    case TypeLine:
+        return p.parseLineAnnotation(base, dict)
+    case TypeSquare, TypeCircle:
+        return p.parseShapeAnnotation(base, dict, AnnotationType(subtype))
+    case TypePolygon, TypePolyLine:
+        return p.parsePolyAnnotation(base, dict, AnnotationType(subtype))
+    case TypeHighlight, TypeUnderline, TypeSquiggly, TypeStrikeOut:
+        return p.parseMarkupAnnotation(base, dict, AnnotationType(subtype))
+    case TypeInk:
+        return p.parseInkAnnotation(base, dict)
+    case TypeStamp:
+        return p.parseStampAnnotation(base, dict)
+    case TypeWidget:
+        return p.parseWidgetAnnotation(base, dict)
+    case TypeFileAttachment:
+        return p.parseFileAttachmentAnnotation(base, dict)
+    case TypeSound:
+        return p.parseSoundAnnotation(base, dict)
+    case TypeMovie:
+        return p.parseMovieAnnotation(base, dict)
+    case Type3D:
+        return p.parse3DAnnotation(base, dict)
+    default:
+        return nil, fmt.Errorf("unsupported annotation type: %s", subtype)
+    }
+}
+
+// internal/pdf/annotations/renderer.go
+type AnnotationRenderer struct {
+    colorSpace   color.ColorSpace
+    fontManager  *FontManager
+    mediaHandler *MediaHandler
+}
+
+func (r *AnnotationRenderer) RenderAnnotation(annot Annotation, ctx *RenderContext) error {
+    // Check if annotation should be visible
+    if !r.shouldRender(annot, ctx) {
+        return nil
+    }
+    
+    // Use appearance stream if available
+    if ap := annot.GetAppearance(); ap != nil {
+        return r.renderAppearanceStream(ap, ctx)
+    }
+    
+    // Otherwise render based on annotation type
+    switch a := annot.(type) {
+    case *TextAnnotation:
+        return r.renderTextAnnotation(a, ctx)
+    case *LinkAnnotation:
+        return r.renderLinkAnnotation(a, ctx)
+    case *MarkupAnnotation:
+        return r.renderMarkupAnnotation(a, ctx)
+    case *LineAnnotation:
+        return r.renderLineAnnotation(a, ctx)
+    case *InkAnnotation:
+        return r.renderInkAnnotation(a, ctx)
+    // ... handle all annotation types
+    }
+}
+
+// internal/pdf/annotations/interaction.go
+type InteractionHandler struct {
+    annotations []Annotation
+    actions     *actions.ActionHandler
+}
+
+func (h *InteractionHandler) HandleClick(x, y float64) error {
+    // Find annotation at position
+    annot := h.findAnnotationAt(x, y)
+    if annot == nil {
+        return nil
+    }
+    
+    switch a := annot.(type) {
+    case *LinkAnnotation:
+        if a.A != nil {
+            return h.actions.ExecuteAction(a.A)
+        } else if a.Dest != nil {
+            return h.navigateToDestination(a.Dest)
+        }
+    case *TextAnnotation:
+        // Toggle open/closed state
+        a.Open = !a.Open
+        return h.updateAnnotation(a)
+    case *FileAttachmentAnnotation:
+        return h.extractAttachment(a)
+    case *SoundAnnotation:
+        return h.playSound(a)
+    case *MovieAnnotation:
+        return h.playMovie(a)
+    }
+    return nil
+}
+
+// internal/pdf/annotations/appearance.go
+type AppearanceGenerator struct {
+    fontManager *FontManager
+    graphics    *GraphicsRenderer
+}
+
+func (g *AppearanceGenerator) GenerateAppearance(annot Annotation) (*AppearanceStream, error) {
+    switch a := annot.(type) {
+    case *FreeTextAnnotation:
+        return g.generateFreeTextAppearance(a)
+    case *StampAnnotation:
+        return g.generateStampAppearance(a)
+    case *InkAnnotation:
+        return g.generateInkAppearance(a)
+    default:
+        return g.generateDefaultAppearance(annot)
+    }
+}
+```
+
+Key implementation considerations:
+1. **Annotation Parsing**: Parse all annotation dictionaries from page Annots array
+2. **Appearance Streams**: Handle Normal, Rollover, and Down appearance states
+3. **Interactive Features**: Implement click handling, hover effects, and state changes
+4. **Rendering Order**: Respect annotation Z-order and page rotation
+5. **Coordinate Systems**: Transform between annotation, page, and device coordinates
+6. **Form Integration**: Special handling for Widget annotations linked to form fields
+7. **Media Handling**: Support for embedded sound, movie, and 3D content
+8. **Action Execution**: Handle annotation actions (GoTo, URI, JavaScript, etc.)
+9. **Popup Management**: Associate popup annotations with their parent annotations
+10. **Appearance Generation**: Create default appearances when AP dict is missing
+
+# Test Strategy:
+Comprehensive testing strategy for annotation support:
+
+1. **Basic Annotation Parsing Tests**:
+   - Test parsing of all 22 annotation types from sample PDFs
+   - Verify correct extraction of common properties (Rect, Contents, Flags)
+   - Test with missing optional properties
+   - Validate annotation flag interpretation (Hidden, Print, NoView, etc.)
+
+2. **Appearance Stream Tests**:
+   - Test annotations with Normal, Rollover, and Down appearances
+   - Verify correct appearance state selection
+   - Test appearance generation for annotations without AP dict
+   - Validate form XObject rendering within appearances
+
+3. **Markup Annotation Tests**:
+   - Test Highlight, Underline, Squiggly, StrikeOut with QuadPoints
+   - Verify correct text coverage calculation
+   - Test with rotated pages and transformed text
+   - Validate color and opacity handling
+
+4. **Interactive Annotation Tests**:
+   - Test Link annotations with various action types
+   - Verify destination navigation (page, named, XYZ)
+   - Test Text annotation open/close toggling
+   - Validate FileAttachment extraction
+   - Test Sound and Movie playback triggers
+
+5. **Geometric Annotation Tests**:
+   - Test Line, Square, Circle, Polygon rendering
+   - Verify border styles (solid, dashed, beveled, inset, underline)
+   - Test line endings (Square, Circle, Diamond, OpenArrow, etc.)
+   - Validate interior color filling
+
+6. **FreeText Annotation Tests**:
+   - Test text rendering with various fonts and sizes
+   - Verify text alignment (left, center, right, justified)
+   - Test callout lines for different intents
+   - Validate rich text formatting
+
+7. **Widget Annotation Tests**:
+   - Test integration with form fields (text, button, choice, signature)
+   - Verify appearance generation for field values
+   - Test interactive form filling
+   - Validate field validation and formatting
+
+8. **Coordinate Transform Tests**:
+   - Test annotation rendering with page rotation (0, 90, 180, 270)
+   - Verify correct positioning after page cropping
+   - Test with various page boxes (MediaBox, CropBox, etc.)
+   - Validate mouse hit testing accuracy
+
+9. **Performance Tests**:
+   - Benchmark rendering 1000+ annotations per page
+   - Test memory usage with complex appearance streams
+   - Verify efficient hit testing for interaction
+   - Profile appearance generation performance
+
+10. **Edge Case Tests**:
+    - Test circular references in popup associations
+    - Handle malformed annotation dictionaries
+    - Test with encrypted PDFs
+    - Verify handling of unknown annotation types

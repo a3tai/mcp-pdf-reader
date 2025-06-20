@@ -77,6 +77,9 @@ pids
 # Cross-platform binaries (build artifacts)
 mcp-pdf-reader-*
 
+# Internal documentation (not for public repo)
+docs/internal-notes/
+
 # Backup files
 *.bak
 *.backup

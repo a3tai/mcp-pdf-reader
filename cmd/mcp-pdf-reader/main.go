@@ -110,7 +110,10 @@ func main() {
 	}
 
 	// Create PDF service
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		log.Fatalf("Failed to create PDF service: %v", err)
+	}
 
 	// Create MCP server
 	server, err := mcp.NewServer(cfg, pdfService)

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +23,10 @@ func TestServer_Run_StdioMode(t *testing.T) {
 		Version:      "1.0.0",
 	}
 
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 	server, err := NewServer(cfg, pdfService)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -54,7 +58,10 @@ func TestServer_Run_ServerMode(t *testing.T) {
 		Version:      "1.0.0",
 	}
 
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 	server, err := NewServer(cfg, pdfService)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -86,7 +93,10 @@ func TestServer_Run_InvalidMode(t *testing.T) {
 		Version:      "1.0.0",
 	}
 
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 	server, err := NewServer(cfg, pdfService)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -116,7 +126,10 @@ func TestServer_runStdioMode(t *testing.T) {
 		Version:      "1.0.0",
 	}
 
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 	server, err := NewServer(cfg, pdfService)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -167,7 +180,10 @@ func TestServer_runServerMode(t *testing.T) {
 		Version:      "1.0.0",
 	}
 
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 	server, err := NewServer(cfg, pdfService)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -234,7 +250,10 @@ func TestServer_Run_ContextCancellation(t *testing.T) {
 				Version:      "1.0.0",
 			}
 
-			pdfService := pdf.NewService(cfg.MaxFileSize)
+			pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+			if err != nil {
+				t.Fatalf("Failed to create PDF service: %v", err)
+			}
 			server, err := NewServer(cfg, pdfService)
 			if err != nil {
 				t.Fatalf("NewServer() error = %v", err)
@@ -267,7 +286,17 @@ func TestServer_Run_ContextCancellation(t *testing.T) {
 }
 
 func TestServer_Run_ConfigValidation(t *testing.T) {
-	pdfService := pdf.NewService(100 * 1024 * 1024)
+	// Create temp directory for test
+	tempDir, err := os.MkdirTemp("", "server_run_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	pdfService, err := pdf.NewService(100*1024*1024, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 
 	tests := []struct {
 		name   string
@@ -322,7 +351,17 @@ func TestServer_Run_ConfigValidation(t *testing.T) {
 }
 
 func TestServer_Run_NilConfig(t *testing.T) {
-	pdfService := pdf.NewService(100 * 1024 * 1024)
+	// Create temp directory for test
+	tempDir, err := os.MkdirTemp("", "server_run_nil_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	pdfService, err := pdf.NewService(100*1024*1024, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 
 	// Test with nil config (will likely panic, so we catch it)
 	server := &Server{
@@ -340,8 +379,8 @@ func TestServer_Run_NilConfig(t *testing.T) {
 		}
 	}()
 
-	err := server.Run(ctx)
-	if err == nil {
+	runErr := server.Run(ctx)
+	if runErr == nil {
 		t.Error("Run() expected error with nil config but got none")
 	}
 }
@@ -392,7 +431,10 @@ func TestServer_Run_ErrorHandling(t *testing.T) {
 		Version:      "1.0.0",
 	}
 
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 	server, err := NewServer(cfg, pdfService)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -423,7 +465,10 @@ func TestServer_Run_GracefulShutdown(t *testing.T) {
 		Version:      "1.0.0",
 	}
 
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 	server, err := NewServer(cfg, pdfService)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -465,7 +510,10 @@ func TestServer_Run_MultipleShutdowns(t *testing.T) {
 		Version:      "1.0.0",
 	}
 
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 	server, err := NewServer(cfg, pdfService)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)

@@ -71,6 +71,8 @@ type DefaultEngine struct {
 	ocrEnabled       bool
 	tableDetectionTh float64
 	debugMode        bool
+	pdfReader        *pdf.Reader
+	filePath         string
 }
 
 // NewEngine creates a new extraction engine with default settings
@@ -110,6 +112,10 @@ func (e *DefaultEngine) Extract(req ExtractionRequest) (*ExtractionResult, error
 		return nil, fmt.Errorf("failed to open PDF: %w", err)
 	}
 	defer f.Close()
+
+	// Store pdfReader for form extraction
+	e.pdfReader = pdfReader
+	e.filePath = req.FilePath
 
 	// Initialize result
 	result := &ExtractionResult{
@@ -474,11 +480,47 @@ func (e *DefaultEngine) extractFormsFromPage(
 	var elements []ContentElement
 	var errors []error
 
-	// Form field extraction would require access to the AcroForm dictionary
-	// This is typically at the document level, not page level
+	// Form extraction requires document-level access
+	if e.pdfReader == nil {
+		errors = append(errors, fmt.Errorf("PDF reader not available for form extraction"))
+		return elements, errors
+	}
 
-	if e.debugMode {
-		errors = append(errors, fmt.Errorf("form extraction requires document-level AcroForm access"))
+	// Extract all forms from the document (done once)
+	// Use file-based extraction if file path is available
+	formExtractor := NewFormExtractor(e.debugMode)
+	var forms []FormField
+	var err error
+
+	if e.filePath != "" {
+		// Preferred method: extract forms using pdfcpu with full access to PDF structure
+		forms, err = formExtractor.ExtractFormsFromFile(e.filePath)
+	} else {
+		// Fallback: use heuristic extraction from pdf.Reader
+		forms, err = formExtractor.ExtractForms(e.pdfReader)
+	}
+
+	if err != nil {
+		errors = append(errors, fmt.Errorf("failed to extract forms: %w", err))
+		return elements, errors
+	}
+
+	// Filter forms for this specific page
+	for _, form := range forms {
+		if form.Page == pageNum {
+			element := ContentElement{
+				Type:       ContentTypeForm,
+				PageNumber: pageNum,
+				Confidence: estimatedConfidenceThreshold,
+				Content: FormElement{
+					Field: form,
+				},
+			}
+			if form.Bounds != nil {
+				element.BoundingBox = *form.Bounds
+			}
+			elements = append(elements, element)
+		}
 	}
 
 	return elements, errors

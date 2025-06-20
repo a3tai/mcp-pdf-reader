@@ -130,6 +130,20 @@ func (s *Server) registerExtractionTools() {
 	)
 	s.mcpServer.AddTool(pdfExtractTablesTool, s.handlePDFExtractTables)
 
+	// Register PDF extract forms tool
+	pdfExtractFormsTool := mcp.NewTool(
+		"pdf_extract_forms",
+		mcp.WithDescription("Extract form fields including text fields, checkboxes, radio buttons, and dropdowns"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+		mcp.WithString("config",
+			mcp.Description("JSON string with extraction configuration options"),
+		),
+	)
+	s.mcpServer.AddTool(pdfExtractFormsTool, s.handlePDFExtractForms)
+
 	// Register PDF extract semantic tool
 	pdfExtractSemanticTool := mcp.NewTool(
 		"pdf_extract_semantic",
@@ -254,16 +268,16 @@ func (s *Server) handlePDFReadFile(ctx context.Context, request mcp.CallToolRequ
 	// Add guidance based on content type
 	switch result.ContentType {
 	case "scanned_images":
-		responseText += "\n🔍 RECOMMENDATION: This PDF appears to contain scanned images with little or no " +
-			"extractable text. Consider using 'pdf_assets_file' to extract the images.\n"
+		responseText += "\n### Recommendation\n\nThis PDF appears to contain scanned images with little or no " +
+			"extractable text. Consider using `pdf_assets_file` to extract the images.\n"
 	case "mixed":
-		responseText += "\n💡 INFO: This PDF contains both text and images. You may want to use " +
-			"'pdf_assets_file' to extract the images as well.\n"
+		responseText += "\n### Info\n\nThis PDF contains both text and images. You may want to use " +
+			"`pdf_assets_file` to extract the images as well.\n"
 	case "no_content":
-		responseText += "\n⚠️  WARNING: This PDF appears to have no readable content or images.\n"
+		responseText += "\n### Warning\n\nThis PDF appears to have no readable content or images.\n"
 	}
 
-	responseText += "\nContent:\n"
+	responseText += "\n## Content\n\n"
 	responseText += result.Content
 
 	return mcp.NewToolResultText(responseText), nil
@@ -440,6 +454,28 @@ func (s *Server) handlePDFExtractTables(ctx context.Context, request mcp.CallToo
 		}, pdf.ExtractionConfig{
 			ExtractText:        true,
 			ExtractTables:      true,
+			IncludeCoordinates: true,
+		})
+}
+
+func (s *Server) handlePDFExtractForms(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return s.handleExtractionRequest(request,
+		func(path string, config pdf.ExtractionConfig) (*pdf.PDFExtractResult, error) {
+			// Convert ExtractionConfig to ExtractConfig for PDFExtractRequest
+			extractConfig := pdf.ExtractConfig{
+				ExtractText:        config.ExtractText,
+				ExtractImages:      config.ExtractImages,
+				ExtractTables:      config.ExtractTables,
+				ExtractForms:       config.ExtractForms,
+				ExtractAnnotations: config.ExtractAnnotations,
+				IncludeCoordinates: config.IncludeCoordinates,
+				IncludeFormatting:  config.IncludeFormatting,
+				Pages:              config.Pages,
+				MinConfidence:      config.MinConfidence,
+			}
+			return s.pdfService.ExtractForms(pdf.PDFExtractRequest{Path: path, Config: extractConfig})
+		}, pdf.ExtractionConfig{
+			ExtractForms:       true,
 			IncludeCoordinates: true,
 		})
 }
@@ -673,23 +709,23 @@ func (s *Server) formatPDFAssetsFileResult(result *pdf.PDFAssetsFileResult) stri
 }
 
 func (s *Server) formatPDFServerInfoResult(result *pdf.PDFServerInfoResult) string {
-	text := fmt.Sprintf("📋 %s v%s - Server Information\n", result.ServerName, result.Version)
-	text += fmt.Sprintf("📁 Default Directory: %s\n", result.DefaultDirectory)
-	text += fmt.Sprintf("📏 Max File Size: %d MB\n\n", result.MaxFileSize/(1024*1024))
+	text := fmt.Sprintf("# %s v%s - Server Information\n\n", result.ServerName, result.Version)
+	text += fmt.Sprintf("**Default Directory:** %s\n", result.DefaultDirectory)
+	text += fmt.Sprintf("**Max File Size:** %d MB\n\n", result.MaxFileSize/(1024*1024))
 
 	// Directory contents
 	if len(result.DirectoryContents) > 0 {
-		text += fmt.Sprintf("📂 Directory Contents (%d PDF files found):\n", len(result.DirectoryContents))
+		text += fmt.Sprintf("## Directory Contents (%d PDF files found)\n\n", len(result.DirectoryContents))
 		for i, file := range result.DirectoryContents {
 			if i >= 10 { // Limit to first 10 files for readability
-				text += fmt.Sprintf("   ... and %d more files\n", len(result.DirectoryContents)-10)
+				text += fmt.Sprintf("*... and %d more files*\n", len(result.DirectoryContents)-10)
 				break
 			}
-			text += fmt.Sprintf("   %d. %s (%d bytes)\n", i+1, file.Name, file.Size)
+			text += fmt.Sprintf("- %s (%d bytes)\n", file.Name, file.Size)
 		}
 		text += "\n"
 	} else {
-		text += "📂 Directory Contents: No PDF files found in default directory\n\n"
+		text += "## Directory Contents\n\n*No PDF files found in default directory*\n\n"
 	}
 
 	// Available tools
@@ -718,78 +754,80 @@ func (s *Server) formatPDFServerInfoResult(result *pdf.PDFServerInfoResult) stri
 // New formatting methods for structured extraction results
 
 func (s *Server) formatPDFExtractResult(result *pdf.PDFExtractResult) string {
-	text := fmt.Sprintf("📄 PDF Extraction Results: %s\n", result.FilePath)
-	text += fmt.Sprintf("🔧 Mode: %s\n", result.Mode)
-	text += fmt.Sprintf("📖 Pages: %d (processed: %v)\n", result.TotalPages, result.ProcessedPages)
-	text += fmt.Sprintf("🎯 Quality: %s\n", result.Summary.Quality)
-	text += fmt.Sprintf("📊 Total Elements: %d\n\n", result.Summary.TotalElements)
+	text := fmt.Sprintf("# PDF Extraction Results\n\n**File:** %s\n", result.FilePath)
+	text += fmt.Sprintf("**Mode:** %s\n", result.Mode)
+	text += fmt.Sprintf("**Pages:** %d (processed: %v)\n", result.TotalPages, result.ProcessedPages)
+	text += fmt.Sprintf("**Quality:** %s\n", result.Summary.Quality)
+	text += fmt.Sprintf("**Total Elements:** %d\n\n", result.Summary.TotalElements)
 
 	// Content type breakdown
-	text += "📋 Content Types Found:\n"
+	text += "## Content Types Found\n\n"
 	for contentType, count := range result.Summary.ContentTypes {
-		text += fmt.Sprintf("  • %s: %d\n", contentType, count)
+		text += fmt.Sprintf("- **%s:** %d\n", contentType, count)
 	}
 	text += "\n"
 
 	// Tables if found
 	if len(result.Tables) > 0 {
-		text += fmt.Sprintf("📊 Tables Found: %d\n", len(result.Tables))
+		text += fmt.Sprintf("## Tables Found: %d\n\n", len(result.Tables))
 		for i, table := range result.Tables {
-			text += fmt.Sprintf("  Table %d: %d rows × %d columns (%d cells)\n",
-				i+1, len(table.Rows), len(table.Columns), table.CellCount)
+			text += fmt.Sprintf("### Table %d\n\n", i+1)
+			text += fmt.Sprintf("- **Dimensions:** %d rows × %d columns (%d cells)\n",
+				len(table.Rows), len(table.Columns), table.CellCount)
 			if table.HasHeaders {
-				text += "    - Has headers\n"
+				text += "- **Headers:** Yes\n"
 			}
-			text += fmt.Sprintf("    - Confidence: %.2f\n", table.Confidence)
+			text += fmt.Sprintf("- **Confidence:** %.2f\n\n", table.Confidence)
 		}
-		text += "\n"
 	}
 
 	// Page breakdown
 	if len(result.Summary.PageBreakdown) > 0 {
-		text += "📄 Page Breakdown:\n"
+		text += "## Page Breakdown\n\n"
 		for _, page := range result.Summary.PageBreakdown {
-			text += fmt.Sprintf("  Page %d: %d elements\n", page.Page, page.Elements)
+			text += fmt.Sprintf("- **Page %d:** %d elements\n", page.Page, page.Elements)
 		}
 		text += "\n"
 	}
 
 	// Suggestions
 	if len(result.Summary.Suggestions) > 0 {
-		text += "💡 Suggestions:\n"
+		text += "## Suggestions\n\n"
 		for _, suggestion := range result.Summary.Suggestions {
-			text += fmt.Sprintf("  • %s\n", suggestion)
+			text += fmt.Sprintf("- %s\n", suggestion)
 		}
 		text += "\n"
 	}
 
 	// Warnings and errors
 	if len(result.Warnings) > 0 {
-		text += "⚠️  Warnings:\n"
+		text += "## Warnings\n\n"
 		for _, warning := range result.Warnings {
-			text += fmt.Sprintf("  • %s\n", warning)
+			text += fmt.Sprintf("- %s\n", warning)
 		}
 		text += "\n"
 	}
 
 	if len(result.Errors) > 0 {
-		text += "❌ Errors:\n"
+		text += "## Errors\n\n"
 		for _, error := range result.Errors {
-			text += fmt.Sprintf("  • %s\n", error)
+			text += fmt.Sprintf("- %s\n", error)
 		}
 		text += "\n"
 	}
 
 	// Show first few elements as examples
 	if len(result.Elements) > 0 {
-		text += fmt.Sprintf("🔍 Content Elements (showing first %d):\n", minInt(5, len(result.Elements)))
+		text += fmt.Sprintf("## Content Elements (showing first %d)\n\n", minInt(5, len(result.Elements)))
 		for i, element := range result.Elements {
 			if i >= 5 {
-				text += fmt.Sprintf("  ... and %d more elements\n", len(result.Elements)-5)
+				text += fmt.Sprintf("*... and %d more elements*\n", len(result.Elements)-5)
 				break
 			}
-			text += fmt.Sprintf("  %d. %s on page %d (confidence: %.2f)\n",
-				i+1, element.Type, element.PageNumber, element.Confidence)
+			text += fmt.Sprintf("### Element %d\n\n", i+1)
+			text += fmt.Sprintf("- **Type:** %s\n", element.Type)
+			text += fmt.Sprintf("- **Page:** %d\n", element.PageNumber)
+			text += fmt.Sprintf("- **Confidence:** %.2f\n", element.Confidence)
 
 			// Show content preview for text elements
 			if element.Type == "text" {
@@ -798,9 +836,10 @@ func (s *Server) formatPDFExtractResult(result *pdf.PDFExtractResult) string {
 					if len(preview) > 100 {
 						preview = preview[:100] + "..."
 					}
-					text += fmt.Sprintf("     Content: %s\n", preview)
+					text += fmt.Sprintf("- **Content:** %s\n", preview)
 				}
 			}
+			text += "\n"
 		}
 	}
 
@@ -808,53 +847,69 @@ func (s *Server) formatPDFExtractResult(result *pdf.PDFExtractResult) string {
 }
 
 func (s *Server) formatPDFQueryResult(result *pdf.PDFQueryResult) string {
-	text := fmt.Sprintf("🔍 Query Results: %s\n", result.FilePath)
-	text += fmt.Sprintf("📊 Matches Found: %d\n", result.MatchCount)
-	text += fmt.Sprintf("🎯 Average Confidence: %.2f\n\n", result.Summary.Confidence)
+	text := fmt.Sprintf("# Query Results\n\n**File:** %s\n", result.FilePath)
+	text += fmt.Sprintf("**Matches Found:** %d\n", result.MatchCount)
+	text += fmt.Sprintf("**Average Confidence:** %.2f\n\n", result.Summary.Confidence)
 
 	// Query details
-	text += "🔎 Query Details:\n"
+	text += "## Query Details\n\n"
 	if len(result.Query.ContentTypes) > 0 {
-		text += fmt.Sprintf("  Content Types: %v\n", result.Query.ContentTypes)
+		text += fmt.Sprintf("**Content Types:** %v\n", result.Query.ContentTypes)
 	}
 	if len(result.Query.Pages) > 0 {
-		text += fmt.Sprintf("  Pages: %v\n", result.Query.Pages)
+		text += fmt.Sprintf("**Pages:** %v\n", result.Query.Pages)
 	}
 	if result.Query.TextQuery != "" {
-		text += fmt.Sprintf("  Text Query: %s\n", result.Query.TextQuery)
+		text += fmt.Sprintf("**Text Query:** %s\n", result.Query.TextQuery)
 	}
 	if result.Query.MinConfidence > 0 {
-		text += fmt.Sprintf("  Min Confidence: %.2f\n", result.Query.MinConfidence)
+		text += fmt.Sprintf("**Min Confidence:** %.2f\n", result.Query.MinConfidence)
 	}
 	text += "\n"
 
 	// Result breakdown
+	// Matching elements breakdown
 	if len(result.Summary.TypeBreakdown) > 0 {
-		text += "📋 Result Breakdown by Type:\n"
+		text += "## Match Breakdown by Type\n\n"
 		for contentType, count := range result.Summary.TypeBreakdown {
-			text += fmt.Sprintf("  • %s: %d\n", contentType, count)
+			text += fmt.Sprintf("- **%s:** %d matches\n", contentType, count)
 		}
 		text += "\n"
 	}
 
 	if len(result.Summary.PageBreakdown) > 0 {
-		text += "📄 Result Breakdown by Page:\n"
+		text += "## Match Breakdown by Page\n\n"
 		for page, count := range result.Summary.PageBreakdown {
-			text += fmt.Sprintf("  • Page %d: %d\n", page, count)
+			text += fmt.Sprintf("- **Page %d:** %d matches\n", page, count)
 		}
 		text += "\n"
 	}
 
 	// Show matching elements
+	// Show first few elements as examples
 	if len(result.Elements) > 0 {
-		text += fmt.Sprintf("🎯 Matching Elements (showing first %d):\n", minInt(10, len(result.Elements)))
+		text += fmt.Sprintf("## Content Elements (showing first %d)\n\n", minInt(5, len(result.Elements)))
 		for i, element := range result.Elements {
-			if i >= 10 {
-				text += fmt.Sprintf("  ... and %d more matches\n", len(result.Elements)-10)
+			if i >= 5 {
+				text += fmt.Sprintf("*... and %d more elements*\n", len(result.Elements)-5)
 				break
 			}
-			text += fmt.Sprintf("  %d. %s on page %d (confidence: %.2f)\n",
-				i+1, element.Type, element.PageNumber, element.Confidence)
+			text += fmt.Sprintf("### Match %d\n\n", i+1)
+			text += fmt.Sprintf("- **Type:** %s\n", element.Type)
+			text += fmt.Sprintf("- **Page:** %d\n", element.PageNumber)
+			text += fmt.Sprintf("- **Confidence:** %.2f\n", element.Confidence)
+
+			// Show content preview for matches
+			if element.Type == "text" {
+				if contentStr, ok := element.Content.(string); ok {
+					preview := contentStr
+					if len(preview) > 150 {
+						preview = preview[:150] + "..."
+					}
+					text += fmt.Sprintf("- **Content:** %s\n", preview)
+				}
+			}
+			text += "\n"
 		}
 	}
 
@@ -862,8 +917,8 @@ func (s *Server) formatPDFQueryResult(result *pdf.PDFQueryResult) string {
 }
 
 func (s *Server) formatPDFPageInfoResult(result *pdf.PDFPageInfoResult) string {
-	text := fmt.Sprintf("📄 Page Information: %s\n", result.FilePath)
-	text += fmt.Sprintf("📖 Total Pages: %d\n\n", len(result.Pages))
+	text := fmt.Sprintf("# Page Information\n\n**File:** %s\n", result.FilePath)
+	text += fmt.Sprintf("**Total Pages:** %d\n\n", len(result.Pages))
 
 	for _, page := range result.Pages {
 		text += fmt.Sprintf("Page %d:\n", page.Number)
@@ -881,51 +936,51 @@ func (s *Server) formatPDFPageInfoResult(result *pdf.PDFPageInfoResult) string {
 }
 
 func (s *Server) formatPDFMetadataResult(result *pdf.PDFMetadataResult) string {
-	text := fmt.Sprintf("📋 Document Metadata: %s\n\n", result.FilePath)
+	text := fmt.Sprintf("# Document Metadata\n\n**File:** %s\n\n", result.FilePath)
 
 	metadata := result.Metadata
 
 	if metadata.Title != "" {
-		text += fmt.Sprintf("📖 Title: %s\n", metadata.Title)
+		text += fmt.Sprintf("**Title:** %s\n", metadata.Title)
 	}
 	if metadata.Author != "" {
-		text += fmt.Sprintf("👤 Author: %s\n", metadata.Author)
+		text += fmt.Sprintf("**Author:** %s\n", metadata.Author)
 	}
 	if metadata.Subject != "" {
-		text += fmt.Sprintf("📝 Subject: %s\n", metadata.Subject)
+		text += fmt.Sprintf("**Subject:** %s\n", metadata.Subject)
 	}
 	if metadata.Creator != "" {
-		text += fmt.Sprintf("🛠️ Creator: %s\n", metadata.Creator)
+		text += fmt.Sprintf("**Creator:** %s\n", metadata.Creator)
 	}
 	if metadata.Producer != "" {
-		text += fmt.Sprintf("🏭 Producer: %s\n", metadata.Producer)
+		text += fmt.Sprintf("**Producer:** %s\n", metadata.Producer)
 	}
 	if metadata.CreationDate != "" {
-		text += fmt.Sprintf("📅 Created: %s\n", metadata.CreationDate)
+		text += fmt.Sprintf("**Created:** %s\n", metadata.CreationDate)
 	}
 	if metadata.ModificationDate != "" {
-		text += fmt.Sprintf("📅 Modified: %s\n", metadata.ModificationDate)
+		text += fmt.Sprintf("**Modified:** %s\n", metadata.ModificationDate)
 	}
 	if len(metadata.Keywords) > 0 {
-		text += fmt.Sprintf("🏷️ Keywords: %v\n", metadata.Keywords)
+		text += fmt.Sprintf("**Keywords:** %v\n", metadata.Keywords)
 	}
 	if metadata.Version != "" {
-		text += fmt.Sprintf("📄 PDF Version: %s\n", metadata.Version)
+		text += fmt.Sprintf("**PDF Version:** %s\n", metadata.Version)
 	}
 	if metadata.PageLayout != "" {
-		text += fmt.Sprintf("📐 Page Layout: %s\n", metadata.PageLayout)
+		text += fmt.Sprintf("**Page Layout:** %s\n", metadata.PageLayout)
 	}
 	if metadata.PageMode != "" {
-		text += fmt.Sprintf("🖥️ Page Mode: %s\n", metadata.PageMode)
+		text += fmt.Sprintf("**Page Mode:** %s\n", metadata.PageMode)
 	}
 	if metadata.Encrypted {
-		text += "🔒 Document is encrypted\n"
+		text += "\n**Security:** Document is encrypted\n"
 	}
 
 	if len(metadata.CustomProperties) > 0 {
-		text += "\n🏷️ Custom Properties:\n"
+		text += "\n## Custom Properties\n\n"
 		for key, value := range metadata.CustomProperties {
-			text += fmt.Sprintf("  • %s: %s\n", key, value)
+			text += fmt.Sprintf("- **%s:** %v\n", key, value)
 		}
 	}
 

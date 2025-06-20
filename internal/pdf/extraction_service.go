@@ -3,6 +3,9 @@ package pdf
 import (
 	"fmt"
 	"os"
+	"time"
+
+	"github.com/a3tai/mcp-pdf-reader/internal/pdf/extraction"
 )
 
 // ExtractionService provides enhanced PDF content extraction capabilities
@@ -58,23 +61,62 @@ func (s *ExtractionService) ExtractStructured(req PDFExtractRequest) (*PDFExtrac
 		mode = "structured"
 	}
 
-	// For now, return a placeholder result
-	// TODO: Implement actual structured extraction
-	return &PDFExtractResult{
-		FilePath:       req.Path,
-		Mode:           mode,
-		TotalPages:     1,
-		ProcessedPages: []int{1},
-		Elements:       []ContentElement{},
-		Tables:         []TableElement{},
-		Summary: ExtractionSummary{
-			ContentTypes:  make(map[string]int),
-			TotalElements: 0,
-			Quality:       "medium",
-		},
-		Metadata: DocumentMetadata{},
-		Warnings: []string{"Structured extraction not yet fully implemented"},
-	}, nil
+	// Create extraction engine
+	engine := extraction.NewEngine()
+
+	// Convert config
+	extractConfig := extraction.ExtractionConfig{
+		Mode:               extraction.ExtractionMode(mode),
+		ExtractText:        req.Config.ExtractText,
+		ExtractImages:      req.Config.ExtractImages,
+		ExtractTables:      req.Config.ExtractTables,
+		ExtractForms:       req.Config.ExtractForms,
+		ExtractAnnotations: req.Config.ExtractAnnotations,
+		IncludeCoordinates: req.Config.IncludeCoordinates,
+		PreserveFormatting: req.Config.IncludeFormatting,
+		Pages:              req.Config.Pages,
+	}
+
+	// Create extraction request
+	extractReq := extraction.ExtractionRequest{
+		FilePath: req.Path,
+		Config:   extractConfig,
+	}
+
+	// Add query if provided
+	if req.Query != nil {
+		extractReq.Query = &extraction.Query{
+			ContentTypes:  convertContentTypes(req.Query.ContentTypes),
+			Pages:         req.Query.Pages,
+			TextQuery:     req.Query.TextQuery,
+			MinConfidence: req.Query.MinConfidence,
+		}
+
+		// Convert bounding box if provided
+		if req.Query.BoundingBox != nil {
+			extractReq.Query.BoundingBox = &extraction.BoundingBox{
+				LowerLeft: extraction.Coordinate{
+					X: req.Query.BoundingBox.X,
+					Y: req.Query.BoundingBox.Y,
+				},
+				UpperRight: extraction.Coordinate{
+					X: req.Query.BoundingBox.X + req.Query.BoundingBox.Width,
+					Y: req.Query.BoundingBox.Y + req.Query.BoundingBox.Height,
+				},
+				Width:  req.Query.BoundingBox.Width,
+				Height: req.Query.BoundingBox.Height,
+			}
+		}
+	}
+
+	// Perform extraction
+	result, err := engine.Extract(extractReq)
+	if err != nil {
+		return nil, fmt.Errorf("extraction failed: %w", err)
+	}
+
+	// Convert extraction result to PDFExtractResult
+	return s.convertExtractionResult(result, req.Path, mode), nil
 }
 
 // ExtractTables performs table detection and extraction
@@ -87,6 +129,20 @@ func (s *ExtractionService) ExtractTables(req PDFExtractRequest) (*PDFExtractRes
 	req.Mode = "table"
 	req.Config.ExtractTables = true
 	req.Config.ExtractText = true // Need text for table detection
+
+	return s.ExtractStructured(req)
+}
+
+// ExtractForms performs form field extraction
+func (s *ExtractionService) ExtractForms(req PDFExtractRequest) (*PDFExtractResult, error) {
+	if err := s.validatePath(req.Path); err != nil {
+		return nil, err
+	}
+
+	// Force form mode
+	req.Mode = "form"
+	req.Config.ExtractForms = true
+	req.Config.IncludeCoordinates = true
 
 	return s.ExtractStructured(req)
 }
@@ -231,4 +287,97 @@ func (s *ExtractionService) buildQuerySummary(elements []ContentElement) QuerySu
 		PageBreakdown: pageBreakdown,
 		Confidence:    avgConfidence,
 	}
+}
+
+// convertExtractionResult converts internal extraction result to API format
+func (s *ExtractionService) convertExtractionResult(result *extraction.ExtractionResult, filePath, mode string) *PDFExtractResult {
+	// Convert elements
+	elements := make([]ContentElement, len(result.Elements))
+	for i, elem := range result.Elements {
+		elements[i] = ContentElement{
+			Type:       string(elem.Type),
+			Content:    elem.Content,
+			PageNumber: elem.PageNumber,
+			BoundingBox: Rectangle{
+				X:      elem.BoundingBox.LowerLeft.X,
+				Y:      elem.BoundingBox.LowerLeft.Y,
+				Width:  elem.BoundingBox.Width,
+				Height: elem.BoundingBox.Height,
+			},
+			Confidence: elem.Confidence,
+		}
+	}
+
+	// Convert tables - for now, tables are extracted as structured text elements
+	tables := make([]TableElement, 0)
+
+	// Build summary
+	contentTypes := make(map[string]int)
+	if result.ExtractionInfo.ElementCounts.Text > 0 {
+		contentTypes["text"] = result.ExtractionInfo.ElementCounts.Text
+	}
+	if result.ExtractionInfo.ElementCounts.Images > 0 {
+		contentTypes["image"] = result.ExtractionInfo.ElementCounts.Images
+	}
+	if result.ExtractionInfo.ElementCounts.Forms > 0 {
+		contentTypes["form"] = result.ExtractionInfo.ElementCounts.Forms
+	}
+	if result.ExtractionInfo.ElementCounts.Tables > 0 {
+		contentTypes["table"] = result.ExtractionInfo.ElementCounts.Tables
+	}
+	if result.ExtractionInfo.ElementCounts.Annotations > 0 {
+		contentTypes["annotation"] = result.ExtractionInfo.ElementCounts.Annotations
+	}
+
+	// Determine quality based on errors/warnings
+	quality := "high"
+	if len(result.Errors) > 0 {
+		quality = "low"
+	} else if len(result.Warnings) > 0 {
+		quality = "medium"
+	}
+
+	return &PDFExtractResult{
+		FilePath:       filePath,
+		Mode:           mode,
+		TotalPages:     result.TotalPages,
+		ProcessedPages: result.ProcessedPages,
+		Elements:       elements,
+		Tables:         tables,
+		Summary: ExtractionSummary{
+			ContentTypes:  contentTypes,
+			TotalElements: len(elements),
+			Quality:       quality,
+		},
+		Metadata: DocumentMetadata{
+			Title:            result.Metadata.Title,
+			Author:           result.Metadata.Author,
+			Subject:          result.Metadata.Subject,
+			Creator:          result.Metadata.Creator,
+			Producer:         result.Metadata.Producer,
+			Keywords:         result.Metadata.Keywords,
+			CreationDate:     result.Metadata.CreationDate.Format(time.RFC3339),
+			ModificationDate: result.Metadata.ModificationDate.Format(time.RFC3339),
+			PageLayout:       result.Metadata.PageLayout,
+			PageMode:         result.Metadata.PageMode,
+			Version:          result.Metadata.Version,
+			Encrypted:        result.Metadata.Encrypted,
+			CustomProperties: result.Metadata.CustomProperties,
+		},
+		Warnings: result.Warnings,
+		Errors:   result.Errors,
+	}
+}
+
+// convertContentTypes converts string content types to extraction.ContentType
+func convertContentTypes(types []string) []extraction.ContentType {
+	if len(types) == 0 {
+		return nil
+	}
+
+	result := make([]extraction.ContentType, len(types))
+	for i, t := range types {
+		result[i] = extraction.ContentType(t)
+	}
+	return result
 }

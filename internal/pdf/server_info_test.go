@@ -26,7 +26,10 @@ func TestServerInfo(t *testing.T) {
 	version := "1.0.0-test"
 
 	// Create PDF service
-	pdfService := NewService(maxFileSize)
+	pdfService, err := NewService(maxFileSize, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 
 	// Test server info functionality
 	req := PDFServerInfoRequest{}
@@ -122,7 +125,10 @@ func TestServerInfoWithEmptyDirectory(t *testing.T) {
 	version := "1.0.0-test"
 
 	// Create PDF service
-	pdfService := NewService(maxFileSize)
+	pdfService, err := NewService(maxFileSize, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 
 	// Test server info with empty directory
 	req := PDFServerInfoRequest{}

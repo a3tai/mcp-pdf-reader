@@ -125,14 +125,7 @@ type VectorCmd struct {
 
 // FormElement represents form fields and interactive elements
 type FormElement struct {
-	FieldType    string      `json:"field_type"` // text, checkbox, radio, button, etc.
-	FieldName    string      `json:"field_name"`
-	Value        interface{} `json:"value,omitempty"`
-	DefaultValue interface{} `json:"default_value,omitempty"`
-	Required     bool        `json:"required,omitempty"`
-	ReadOnly     bool        `json:"read_only,omitempty"`
-	Options      []string    `json:"options,omitempty"` // For choice fields
-	MaxLength    int         `json:"max_length,omitempty"`
+	Field FormField `json:"field"`
 }
 
 // AnnotationElement represents PDF annotations

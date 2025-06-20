@@ -2,6 +2,9 @@ package pdf
 
 import (
 	"fmt"
+	"time"
+
+	"github.com/a3tai/mcp-pdf-reader/internal/pdf/security"
 )
 
 // Service handles PDF file operations by orchestrating various PDF components
@@ -13,10 +16,16 @@ type Service struct {
 	assets            *Assets
 	search            *Search
 	extractionService *ExtractionService
+	pathValidator     *security.PathValidator
 }
 
 // NewService creates a new PDF service with all components
-func NewService(maxFileSize int64) *Service {
+func NewService(maxFileSize int64, configuredDirectory string) (*Service, error) {
+	pathValidator, err := security.NewPathValidator(configuredDirectory)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create path validator: %w", err)
+	}
+
 	return &Service{
 		maxFileSize:       maxFileSize,
 		reader:            NewReader(maxFileSize),
@@ -25,31 +34,54 @@ func NewService(maxFileSize int64) *Service {
 		assets:            NewAssets(maxFileSize),
 		search:            NewSearch(maxFileSize),
 		extractionService: NewExtractionService(maxFileSize),
-	}
+		pathValidator:     pathValidator,
+	}, nil
 }
 
 // PDFReadFile reads the content of a PDF file
 func (s *Service) PDFReadFile(req PDFReadFileRequest) (*PDFReadFileResult, error) {
+	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
 	return s.reader.ReadFile(req)
 }
 
 // PDFAssetsFile extracts visual assets like images from a PDF file
 func (s *Service) PDFAssetsFile(req PDFAssetsFileRequest) (*PDFAssetsFileResult, error) {
+	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
 	return s.assets.ExtractAssets(req)
 }
 
 // PDFValidateFile performs validation on a PDF file
 func (s *Service) PDFValidateFile(req PDFValidateFileRequest) (*PDFValidateFileResult, error) {
+	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
 	return s.validator.ValidateFile(req)
 }
 
 // PDFStatsFile returns detailed statistics about a single PDF file
 func (s *Service) PDFStatsFile(req PDFStatsFileRequest) (*PDFStatsFileResult, error) {
+	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
 	return s.stats.GetFileStats(req)
 }
 
-// PDFSearchDirectory searches for PDF files in the specified directory
+// PDFSearchDirectory searches for PDF files in a directory
 func (s *Service) PDFSearchDirectory(req PDFSearchDirectoryRequest) (*PDFSearchDirectoryResult, error) {
+	// If no directory specified, use configured directory
+	if req.Directory == "" {
+		req.Directory = s.pathValidator.GetConfiguredDirectory()
+	}
+
+	// Validate directory is within configured bounds
+	if err := s.pathValidator.ValidateDirectory(req.Directory); err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
 	return s.search.SearchDirectory(req)
 }
 
@@ -92,10 +124,40 @@ func (s *Service) GetSupportedImageFormats() []string {
 func (s *Service) PDFServerInfo(req PDFServerInfoRequest, serverName, version,
 	defaultDirectory string,
 ) (*PDFServerInfoResult, error) {
-	// Get directory contents
-	directoryContents, err := s.search.FindPDFsInDirectory(defaultDirectory)
-	if err != nil {
+	// Validate the default directory is within bounds
+	validatedDir := defaultDirectory
+	if err := s.pathValidator.ValidateDirectory(defaultDirectory); err != nil {
+		// Use the configured directory if validation fails
+		validatedDir = s.pathValidator.GetConfiguredDirectory()
+	}
+
+	// Get directory contents with a timeout to prevent hanging
+	// Limit to first 100 files for performance
+	directoryContents := []FileInfo{}
+
+	// Create a channel to receive results
+	resultChan := make(chan []FileInfo, 1)
+	errorChan := make(chan error, 1)
+
+	// Run directory search in a goroutine with timeout
+	go func() {
+		files, err := s.search.FindPDFsInDirectoryLimited(validatedDir, 100)
+		if err != nil {
+			errorChan <- err
+			return
+		}
+		resultChan <- files
+	}()
+
+	// Wait for result with timeout
+	select {
+	case files := <-resultChan:
+		directoryContents = files
+	case <-errorChan:
 		// Don't fail completely if directory scan fails, just return empty contents
+		directoryContents = []FileInfo{}
+	case <-time.After(5 * time.Second):
+		// Timeout after 5 seconds
 		directoryContents = []FileInfo{}
 	}
 
@@ -178,7 +240,7 @@ IMPORTANT NOTES:
 	result := &PDFServerInfoResult{
 		ServerName:        serverName,
 		Version:           version,
-		DefaultDirectory:  defaultDirectory,
+		DefaultDirectory:  validatedDir,
 		MaxFileSize:       s.maxFileSize,
 		AvailableTools:    availableTools,
 		DirectoryContents: directoryContents,
@@ -191,6 +253,11 @@ IMPORTANT NOTES:
 
 // ExtractStructured performs structured content extraction with positioning and formatting
 func (s *Service) ExtractStructured(req PDFExtractStructuredRequest) (*PDFExtractResult, error) {
+	// Validate path is within configured directory
+	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
 	// Convert to internal request format
 	extractReq := PDFExtractRequest{
 		Path:   req.Path,
@@ -217,6 +284,17 @@ func (s *Service) ExtractTables(req PDFExtractTablesRequest) (*PDFExtractResult,
 	return s.extractionService.ExtractTables(extractReq)
 }
 
+// ExtractForms performs form field extraction
+func (s *Service) ExtractForms(req PDFExtractRequest) (*PDFExtractResult, error) {
+	extractReq := PDFExtractRequest{
+		Path:   req.Path,
+		Mode:   "form",
+		Config: req.Config,
+	}
+
+	return s.extractionService.ExtractForms(extractReq)
+}
+
 // ExtractSemantic performs semantic content grouping
 func (s *Service) ExtractSemantic(req PDFExtractSemanticRequest) (*PDFExtractResult, error) {
 	extractReq := PDFExtractRequest{
@@ -230,6 +308,12 @@ func (s *Service) ExtractSemantic(req PDFExtractSemanticRequest) (*PDFExtractRes
 
 // ExtractComplete performs comprehensive extraction of all content types
 func (s *Service) ExtractComplete(req PDFExtractCompleteRequest) (*PDFExtractResult, error) {
+	// Validate path is within configured directory
+	if err := s.pathValidator.ValidatePath(req.Path); err != nil {
+		return nil, fmt.Errorf("security validation failed: %w", err)
+	}
+
+	// Convert to internal request format
 	extractReq := PDFExtractRequest{
 		Path:   req.Path,
 		Mode:   "complete",

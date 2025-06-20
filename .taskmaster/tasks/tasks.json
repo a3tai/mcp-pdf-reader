@@ -9,7 +9,7 @@
         "testStrategy": "Unit tests for MCP message handling, integration tests for server startup/shutdown, validate tool registration and basic protocol compliance. Test with mock PDF operations to ensure server responds correctly to MCP requests.",
         "priority": "high",
         "dependencies": [],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -22,7 +22,7 @@
         "dependencies": [
           1
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -35,7 +35,7 @@
         "dependencies": [
           2
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -48,7 +48,7 @@
         "dependencies": [
           3
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -61,7 +61,7 @@
         "dependencies": [
           4
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -74,7 +74,7 @@
         "dependencies": [
           4
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -87,8 +87,65 @@
         "dependencies": [
           4
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement AcroForm Dictionary Parser",
+            "description": "Create functionality to locate and parse the AcroForm dictionary from the PDF catalog, including handling of field tree structures and inheritance",
+            "dependencies": [],
+            "details": "Implement methods to: 1) Locate the AcroForm entry in the PDF catalog dictionary, 2) Parse the Fields array to build the field tree hierarchy, 3) Handle field inheritance where child fields inherit properties from parent fields, 4) Extract default appearance settings and form-level properties like NeedAppearances flag",
+            "status": "done",
+            "testStrategy": "Create unit tests with sample PDF catalog structures containing various AcroForm configurations, including nested field hierarchies and inherited properties"
+          },
+          {
+            "id": 2,
+            "title": "Build Field Type Detection and Property Extraction",
+            "description": "Implement logic to identify field types (text, checkbox, radio, dropdown) and extract their specific properties including flags, default values, and appearance characteristics",
+            "dependencies": [
+              1
+            ],
+            "details": "Create type detection based on FT (Field Type) entry: 1) Tx for text fields, 2) Btn for buttons (checkboxes/radio), 3) Ch for choice fields (dropdowns/lists). Extract field flags to determine multiline, password, file select properties. Parse field dictionaries for properties like MaxLen, default value (DV), current value (V), and field name (T)",
+            "status": "done",
+            "testStrategy": "Test with PDFs containing each field type, verify correct type identification and property extraction including edge cases like missing optional properties"
+          },
+          {
+            "id": 3,
+            "title": "Implement Field Value and Options Extraction",
+            "description": "Extract current values from form fields and parse options for choice fields (dropdowns, lists) including export values and display text",
+            "dependencies": [
+              2
+            ],
+            "details": "Parse V (value) entries handling different data types: strings for text fields, names for checkboxes/radio buttons, strings or arrays for choice fields. For choice fields, parse Opt array to extract available options as pairs of export values and display text. Handle special cases like multiple selection in list boxes",
+            "status": "done",
+            "testStrategy": "Create test cases with pre-filled forms, empty forms, and forms with various option configurations including multi-select lists"
+          },
+          {
+            "id": 4,
+            "title": "Extract Field Positioning and Validation Rules",
+            "description": "Parse field appearance rectangles for positioning information and extract validation rules including format, range, and custom JavaScript validation",
+            "dependencies": [
+              2
+            ],
+            "details": "Extract Rect array from field or widget annotation to determine field bounds on page. Parse validation dictionary (V) for format (AFNumber_Format, AFDate_Format), keystroke validation, and range checks. Extract JavaScript actions from AA (additional actions) dictionary for custom validation. Map page coordinates to consistent coordinate system",
+            "status": "done",
+            "testStrategy": "Test with forms containing various validation rules, ensure correct coordinate extraction and transformation, verify JavaScript action detection"
+          },
+          {
+            "id": 5,
+            "title": "Implement pdf_extract_forms MCP Tool",
+            "description": "Create the MCP tool interface that orchestrates the form extraction process and returns structured form field data in the specified JSON format",
+            "dependencies": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "details": "Implement the pdf_extract_forms function that: 1) Accepts PDF document input, 2) Calls FormExtractor.ExtractForms to process the document, 3) Transforms extracted data into the FormField model structure, 4) Handles errors gracefully with appropriate error messages, 5) Returns JSON response with array of form fields including all properties, bounds, and validation rules",
+            "status": "done",
+            "testStrategy": "Integration tests with complete PDF forms, verify end-to-end extraction and JSON output format, test error handling for malformed PDFs"
+          }
+        ]
       },
       {
         "id": 8,
@@ -100,7 +157,7 @@
         "dependencies": [
           5
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -112,10 +169,9 @@
         "priority": "low",
         "dependencies": [
           6,
-          7,
           8
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -130,12 +186,142 @@
           9
         ],
         "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Document Content Extractors",
+            "description": "Create modular extractors for different content types (text, tables, images, forms) that can parse and structure raw PDF content into analyzable formats",
+            "dependencies": [],
+            "details": "Create an Extractor interface and implement concrete extractors: TextExtractor for paragraphs and headers, TableExtractor for tabular data, ImageExtractor for embedded images, and FormExtractor for form fields. Each extractor should return structured data with position information and confidence scores.",
+            "status": "done",
+            "testStrategy": "Unit test each extractor with sample PDF content, verify extraction accuracy and position mapping, test edge cases like rotated text and complex tables"
+          },
+          {
+            "id": 2,
+            "title": "Build Document Structure Detection System",
+            "description": "Implement algorithms to detect document sections, hierarchies, and logical structure including headers, paragraphs, lists, and their relationships",
+            "dependencies": [
+              1
+            ],
+            "details": "Create a StructureDetector that analyzes extracted content to identify document sections, build a hierarchical tree of content relationships, detect reading order, and map spatial relationships between elements. Use font sizes, positioning, and styling to infer structure.",
+            "status": "done",
+            "testStrategy": "Test with various document types (reports, articles, forms), verify correct hierarchy detection, validate reading order accuracy"
+          },
+          {
+            "id": 3,
+            "title": "Create Document Classification Engine",
+            "description": "Develop a rule-based document classifier that can identify document types (invoice, report, form, contract, etc.) based on content patterns and structure",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Implement DocumentClassifier with pattern matching for keywords, structure signatures, and content heuristics. Create classification rules for common document types, implement confidence scoring, and support custom classification rules. Design for future ML model integration.",
+            "status": "in-progress",
+            "testStrategy": "Test classification accuracy across document types, verify confidence scores, test with ambiguous documents"
+          },
+          {
+            "id": 4,
+            "title": "Implement Document Analysis and Insights Generation",
+            "description": "Build the core DocumentAnalyzer that orchestrates extractors, structure detection, and classification to produce comprehensive document analysis with statistics and quality metrics",
+            "dependencies": [
+              1,
+              2,
+              3
+            ],
+            "details": "Implement the DocumentAnalyzer.Analyze method to coordinate all components, calculate content statistics (word count, table count, image count), assess document quality metrics (readability, completeness, formatting consistency), and generate actionable suggestions for document improvement.",
+            "status": "pending",
+            "testStrategy": "Integration test the full analysis pipeline, verify statistics accuracy, validate quality metrics against known documents"
+          },
+          {
+            "id": 5,
+            "title": "Create pdf_analyze_document MCP Tool",
+            "description": "Implement the Model Context Protocol tool that exposes document analysis capabilities with proper request/response handling and error management",
+            "dependencies": [
+              4
+            ],
+            "details": "Create the MCP tool handler that accepts PDF document input, invokes the DocumentAnalyzer, formats the DocumentAnalysis response as JSON, handles errors gracefully, and provides detailed analysis results including type, sections, statistics, quality metrics, and suggestions.",
+            "status": "pending",
+            "testStrategy": "Test MCP tool with various PDF inputs, verify JSON response structure, test error handling for invalid inputs"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Research and Integrate PDF Form Library (pdfcpu)",
+        "description": "Research and integrate pdfcpu or similar Go library that provides proper AcroForm access according to PDF 1.4/1.7 standards, enabling robust form field extraction capabilities",
+        "details": "Research and integrate a PDF library with AcroForm support:\n\n```go\n// internal/pdf/forms/library_adapter.go\ntype FormLibraryAdapter interface {\n    LoadPDF(reader io.Reader) error\n    GetAcroForm() (*AcroForm, error)\n    ExtractFormFields() ([]RawFormField, error)\n}\n\n// internal/pdf/forms/pdfcpu_adapter.go\ntype PDFCPUAdapter struct {\n    ctx *pdfcpu.Context\n}\n\nfunc (p *PDFCPUAdapter) LoadPDF(reader io.Reader) error {\n    // Initialize pdfcpu context\n    // Validate PDF structure\n    // Load form dictionary\n}\n\nfunc (p *PDFCPUAdapter) GetAcroForm() (*AcroForm, error) {\n    // Access AcroForm dictionary\n    // Parse field hierarchy\n    // Extract form metadata\n}\n\n// internal/pdf/forms/field_parser.go\ntype FieldParser struct {\n    adapter FormLibraryAdapter\n}\n\nfunc (fp *FieldParser) ParseField(dict pdfcpu.Dict) (*RawFormField, error) {\n    // Extract field type (FT)\n    // Get field name (T)\n    // Parse field flags (Ff)\n    // Extract default value (DV)\n    // Get current value (V)\n    // Parse appearance streams\n}\n```\n\nResearch considerations:\n1. Evaluate pdfcpu vs other libraries (unipdf, pdfium-go bindings)\n2. Ensure pure Go implementation (no CGO) for portability\n3. Verify PDF 1.4/1.7 standard compliance\n4. Check support for all form field types:\n   - Text fields (Tx)\n   - Checkboxes (Btn with checkbox flag)\n   - Radio buttons (Btn with radio flag)\n   - Dropdown/combo boxes (Ch)\n   - Signature fields (Sig)\n5. Validate handling of field inheritance and merged dictionaries\n6. Test performance with large forms\n\nIntegration approach:\n```go\n// internal/extractors/forms_enhanced.go\ntype EnhancedFormExtractor struct {\n    parser    *pdf.PDFParser\n    adapter   FormLibraryAdapter\n}\n\nfunc (efe *EnhancedFormExtractor) Extract(doc *PDFDocument) ([]FormField, error) {\n    // Use existing parser for basic structure\n    // Leverage library for AcroForm access\n    // Map library fields to our FormField model\n    // Handle field positioning and appearance\n}\n```",
+        "testStrategy": "Create comprehensive test suite for library integration:\n\n1. Library evaluation tests:\n   - Test pdfcpu with sample forms from PDF reference\n   - Verify field extraction accuracy\n   - Benchmark performance vs existing implementation\n\n2. Integration tests:\n   - Test with forms containing all field types\n   - Verify field hierarchy parsing\n   - Test inherited field properties\n   - Validate appearance stream handling\n\n3. Compatibility tests:\n   - Test with PDF 1.4 and 1.7 forms\n   - Verify handling of XFA forms (if supported)\n   - Test encrypted/protected forms\n   - Validate Unicode field names and values\n\n4. Edge case tests:\n   - Malformed AcroForm dictionaries\n   - Missing required field properties\n   - Circular field references\n   - Large forms (1000+ fields)\n\n5. Regression tests:\n   - Ensure existing PDF parsing still works\n   - Verify no performance degradation\n   - Test memory usage with large forms",
+        "status": "done",
+        "dependencies": [
+          2,
+          7
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 12,
+        "title": "Implement AcroForm Dictionary Parser",
+        "description": "Build a specialized parser to extract and process the AcroForm dictionary from PDF catalog, handling the complete form field hierarchy including field inheritance and widget annotations according to PDF 1.7 section 12.7",
+        "details": "Implement comprehensive AcroForm dictionary parsing:\n\n```go\n// internal/pdf/forms/acroform_parser.go\ntype AcroFormParser struct {\n    catalog    *PDFCatalog\n    resolver   ObjectResolver\n}\n\ntype AcroForm struct {\n    Fields          []FieldDict    `json:\"fields\"`\n    NeedAppearances bool          `json:\"needAppearances\"`\n    SigFlags        int           `json:\"sigFlags\"`\n    CO              []ObjectRef   `json:\"co,omitempty\"`\n    DR              ResourceDict  `json:\"dr,omitempty\"`\n    DA              string        `json:\"da,omitempty\"`\n    Q               int           `json:\"q,omitempty\"`\n}\n\nfunc (p *AcroFormParser) ParseAcroForm() (*AcroForm, error) {\n    // 1. Get AcroForm entry from catalog\n    acroFormRef := p.catalog.Get(\"AcroForm\")\n    if acroFormRef == nil {\n        return nil, ErrNoAcroForm\n    }\n    \n    // 2. Resolve indirect reference\n    acroFormDict := p.resolver.Resolve(acroFormRef)\n    \n    // 3. Parse AcroForm dictionary entries\n    form := &AcroForm{}\n    \n    // Parse Fields array (required)\n    if fields := acroFormDict.Get(\"Fields\"); fields != nil {\n        form.Fields = p.parseFieldArray(fields)\n    }\n    \n    // Parse optional entries\n    form.NeedAppearances = acroFormDict.GetBool(\"NeedAppearances\", false)\n    form.SigFlags = acroFormDict.GetInt(\"SigFlags\", 0)\n    form.DA = acroFormDict.GetString(\"DA\", \"\")\n    form.Q = acroFormDict.GetInt(\"Q\", 0)\n    \n    return form, nil\n}\n\n// internal/pdf/forms/field_parser.go\ntype FieldDict struct {\n    Type       string              `json:\"type\"`       // FT entry\n    Parent     *ObjectRef          `json:\"parent,omitempty\"`\n    Kids       []FieldDict         `json:\"kids,omitempty\"`\n    T          string              `json:\"t\"`          // Partial field name\n    TU         string              `json:\"tu,omitempty\"` // Alternate name\n    TM         string              `json:\"tm,omitempty\"` // Mapping name\n    Ff         uint32              `json:\"ff,omitempty\"` // Field flags\n    V          interface{}         `json:\"v,omitempty\"`  // Field value\n    DV         interface{}         `json:\"dv,omitempty\"` // Default value\n    AA         map[string]Action   `json:\"aa,omitempty\"` // Additional actions\n    Widgets    []WidgetAnnotation  `json:\"widgets,omitempty\"`\n}\n\nfunc (p *AcroFormParser) parseFieldArray(fieldsObj Object) []FieldDict {\n    var fields []FieldDict\n    \n    if array, ok := fieldsObj.(ArrayObject); ok {\n        for _, fieldRef := range array {\n            field := p.parseFieldDict(fieldRef)\n            if field != nil {\n                fields = append(fields, *field)\n            }\n        }\n    }\n    \n    return fields\n}\n\nfunc (p *AcroFormParser) parseFieldDict(fieldRef Object) *FieldDict {\n    // Resolve indirect reference\n    fieldObj := p.resolver.Resolve(fieldRef)\n    dict, ok := fieldObj.(DictObject)\n    if !ok {\n        return nil\n    }\n    \n    field := &FieldDict{}\n    \n    // Parse field type (may be inherited)\n    field.Type = p.getInheritedValue(dict, \"FT\").(string)\n    \n    // Parse field name components\n    field.T = dict.GetString(\"T\", \"\")\n    field.TU = dict.GetString(\"TU\", \"\")\n    field.TM = dict.GetString(\"TM\", \"\")\n    \n    // Parse field flags (inheritable)\n    if ff := p.getInheritedValue(dict, \"Ff\"); ff != nil {\n        field.Ff = uint32(ff.(int))\n    }\n    \n    // Parse value and default value\n    field.V = p.parseFieldValue(dict.Get(\"V\"), field.Type)\n    field.DV = p.parseFieldValue(dict.Get(\"DV\"), field.Type)\n    \n    // Handle field hierarchy\n    if kids := dict.Get(\"Kids\"); kids != nil {\n        field.Kids = p.parseFieldArray(kids)\n    } else {\n        // Terminal field - parse widget annotations\n        field.Widgets = p.parseWidgetAnnotations(dict)\n    }\n    \n    return field\n}\n\n// Handle field inheritance according to PDF spec\nfunc (p *AcroFormParser) getInheritedValue(field DictObject, key string) interface{} {\n    // Check current field\n    if val := field.Get(key); val != nil {\n        return val\n    }\n    \n    // Check parent hierarchy\n    parent := field.Get(\"Parent\")\n    for parent != nil {\n        parentDict := p.resolver.Resolve(parent).(DictObject)\n        if val := parentDict.Get(key); val != nil {\n            return val\n        }\n        parent = parentDict.Get(\"Parent\")\n    }\n    \n    return nil\n}\n\n// internal/pdf/forms/widget_parser.go\ntype WidgetAnnotation struct {\n    Rect       Rectangle          `json:\"rect\"`\n    Page       int                `json:\"page\"`\n    AP         AppearanceDict     `json:\"ap,omitempty\"`\n    AS         string             `json:\"as,omitempty\"`\n    Border     []float64          `json:\"border,omitempty\"`\n    C          []float64          `json:\"c,omitempty\"`\n    StructParent int              `json:\"structParent,omitempty\"`\n}\n\nfunc (p *AcroFormParser) parseWidgetAnnotations(field DictObject) []WidgetAnnotation {\n    var widgets []WidgetAnnotation\n    \n    // Check if field is merged with widget\n    if rect := field.Get(\"Rect\"); rect != nil {\n        widget := p.parseWidgetAnnotation(field)\n        widgets = append(widgets, widget)\n    }\n    \n    // Check for separate widget annotations\n    if annots := field.Get(\"Kids\"); annots != nil {\n        // Parse child widgets\n        for _, annotRef := range annots.(ArrayObject) {\n            annotDict := p.resolver.Resolve(annotRef).(DictObject)\n            if annotDict.GetName(\"Subtype\") == \"Widget\" {\n                widget := p.parseWidgetAnnotation(annotDict)\n                widgets = append(widgets, widget)\n            }\n        }\n    }\n    \n    return widgets\n}\n\n// Field value parsing based on field type\nfunc (p *AcroFormParser) parseFieldValue(val Object, fieldType string) interface{} {\n    if val == nil {\n        return nil\n    }\n    \n    switch fieldType {\n    case \"Tx\": // Text field\n        return p.resolver.ResolveString(val)\n    case \"Ch\": // Choice field\n        if array, ok := val.(ArrayObject); ok {\n            var options []string\n            for _, opt := range array {\n                options = append(options, p.resolver.ResolveString(opt))\n            }\n            return options\n        }\n        return p.resolver.ResolveString(val)\n    case \"Btn\": // Button field\n        if name, ok := val.(NameObject); ok {\n            return string(name)\n        }\n        return nil\n    default:\n        return val\n    }\n}\n```\n\nKey implementation considerations:\n1. Handle field inheritance properly - FT, Ff, V, DV can be inherited from ancestors\n2. Support merged fields (field dict contains widget properties) and separate widgets\n3. Parse all field types: text (Tx), button (Btn), choice (Ch), signature (Sig)\n4. Handle field naming hierarchy with fully qualified names\n5. Support field collections and calculation order (CO array)\n6. Parse default resources (DR) and default appearance (DA)",
+        "testStrategy": "Comprehensive testing for AcroForm dictionary parsing:\n\n1. **Basic AcroForm parsing tests**:\n   - Test with PDFs containing valid AcroForm dictionaries\n   - Verify correct parsing of all AcroForm entries (Fields, NeedAppearances, SigFlags, etc.)\n   - Test with missing optional entries\n   - Test with PDFs that have no forms (should return appropriate error)\n\n2. **Field hierarchy tests**:\n   - Create test PDFs with nested field hierarchies\n   - Verify field inheritance works correctly (FT, Ff, V, DV)\n   - Test fully qualified field name construction\n   - Test with deeply nested field trees (3+ levels)\n\n3. **Field type specific tests**:\n   - Text fields: single line, multiline, password, file select\n   - Button fields: push buttons, checkboxes, radio buttons\n   - Choice fields: list boxes, combo boxes, multi-select\n   - Signature fields with various states\n\n4. **Widget annotation tests**:\n   - Test merged field/widget dictionaries\n   - Test separate widget annotations in Kids array\n   - Verify correct page association for widgets\n   - Test appearance streams (AP dictionary)\n\n5. **Edge cases and error handling**:\n   - Circular references in field hierarchy\n   - Invalid field types\n   - Malformed field dictionaries\n   - Missing required entries\n   - Test with PDF 1.4 and 1.7 form variations\n\n6. **Integration tests**:\n   - Parse real-world PDF forms from Adobe, government forms, etc.\n   - Compare output with reference implementations\n   - Verify all field properties are correctly extracted\n   - Test performance with forms containing 100+ fields\n\nTest data should include example PDFs from PDF reference documentation and real-world forms with various complexity levels.",
+        "status": "done",
+        "dependencies": [
+          2,
+          11
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 13,
+        "title": "Create PDF Library Wrapper Interface",
+        "description": "Design and implement an abstraction layer that provides a unified interface for PDF operations, allowing seamless switching between ledongthuc/pdf, pdfcpu, or custom implementations",
+        "details": "Create a flexible PDF library wrapper that abstracts common operations:\n\n```go\n// internal/pdf/wrapper/interface.go\ntype PDFLibrary interface {\n    // Core operations\n    Open(reader io.Reader) (PDFDocument, error)\n    OpenFile(path string) (PDFDocument, error)\n    Validate() error\n    Close() error\n    \n    // Metadata operations\n    GetMetadata() (*Metadata, error)\n    GetPageCount() (int, error)\n    GetVersion() (string, error)\n    \n    // Content extraction\n    ExtractText(pageNum int) ([]TextElement, error)\n    ExtractImages(pageNum int) ([]ImageElement, error)\n    ExtractForms() ([]FormField, error)\n    \n    // Advanced operations\n    GetContentStream(pageNum int) ([]byte, error)\n    GetPageResources(pageNum int) (*Resources, error)\n    GetCatalog() (*Catalog, error)\n}\n\n// internal/pdf/wrapper/factory.go\ntype LibraryType string\n\nconst (\n    LibraryCustom    LibraryType = \"custom\"\n    LibraryPDFCPU    LibraryType = \"pdfcpu\"\n    LibraryLedongthuc LibraryType = \"ledongthuc\"\n)\n\ntype PDFLibraryFactory struct {\n    defaultLib LibraryType\n}\n\nfunc (f *PDFLibraryFactory) Create(libType LibraryType) (PDFLibrary, error) {\n    switch libType {\n    case LibraryCustom:\n        return &CustomPDFLibrary{}, nil\n    case LibraryPDFCPU:\n        return &PDFCPULibrary{}, nil\n    case LibraryLedongthuc:\n        return &LedongthucLibrary{}, nil\n    default:\n        return nil, fmt.Errorf(\"unknown library type: %s\", libType)\n    }\n}\n\n// internal/pdf/wrapper/custom.go\ntype CustomPDFLibrary struct {\n    parser *PDFParser\n    doc    *PDFDocument\n}\n\nfunc (c *CustomPDFLibrary) Open(reader io.Reader) (PDFDocument, error) {\n    // Use existing custom parser implementation\n    c.parser = NewPDFParser(reader)\n    return c.parser.Parse()\n}\n\n// internal/pdf/wrapper/pdfcpu.go\ntype PDFCPULibrary struct {\n    ctx *pdfcpu.Context\n}\n\nfunc (p *PDFCPULibrary) Open(reader io.Reader) (PDFDocument, error) {\n    // Wrap pdfcpu operations\n    config := pdfcpu.NewDefaultConfiguration()\n    ctx, err := pdfcpu.Read(reader, config)\n    if err != nil {\n        return nil, err\n    }\n    p.ctx = ctx\n    return p.wrapDocument(), nil\n}\n\n// internal/pdf/wrapper/ledongthuc.go\ntype LedongthucLibrary struct {\n    pdf *ledongthuc.PDF\n}\n\nfunc (l *LedongthucLibrary) Open(reader io.Reader) (PDFDocument, error) {\n    // Wrap ledongthuc/pdf operations\n    pdf, err := ledongthuc.NewPDF(reader)\n    if err != nil {\n        return nil, err\n    }\n    l.pdf = pdf\n    return l.wrapDocument(), nil\n}\n\n// Common types for unified interface\ntype PDFDocument interface {\n    GetPage(num int) (PDFPage, error)\n    GetPageCount() int\n    GetMetadata() map[string]string\n}\n\ntype TextElement struct {\n    Text     string\n    Position Point\n    Font     FontInfo\n    Size     float64\n}\n\n// Configuration for library selection\ntype WrapperConfig struct {\n    PreferredLibrary LibraryType\n    Fallbacks        []LibraryType\n    Features         []string // Required features for library selection\n}\n\n// Smart library selector based on document characteristics\nfunc SelectOptimalLibrary(doc io.Reader, config WrapperConfig) (PDFLibrary, error) {\n    // Analyze document to determine best library\n    // Check for specific features (forms, encryption, etc.)\n    // Return most suitable implementation\n}\n```\n\nImplement adapter pattern for each library to ensure consistent behavior and error handling across implementations.",
+        "testStrategy": "Comprehensive testing strategy for the wrapper interface:\n\n1. **Interface compliance tests**:\n   - Verify all implementations satisfy PDFLibrary interface\n   - Test method signatures and return types\n   - Ensure consistent error types across implementations\n\n2. **Functional equivalence tests**:\n   - Create test suite that runs against all three implementations\n   - Compare extracted text, images, and metadata\n   - Verify identical results for same PDF inputs\n   - Test with PDFs from docs/examples/\n\n3. **Performance benchmarks**:\n   - Benchmark each implementation for common operations\n   - Compare memory usage and processing speed\n   - Test with large PDFs (100+ pages)\n\n4. **Feature coverage matrix**:\n   - Test form extraction capabilities per library\n   - Verify image extraction support\n   - Check Unicode and encoding handling\n   - Test encrypted PDF support\n\n5. **Fallback mechanism tests**:\n   - Test automatic fallback when preferred library fails\n   - Verify graceful degradation of features\n   - Test library selection logic\n\n6. **Integration tests**:\n   - Test wrapper with existing extractors\n   - Verify MCP server works with all implementations\n   - Test hot-swapping of libraries at runtime",
+        "status": "done",
+        "dependencies": [
+          2,
+          11
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 14,
+        "title": "Implement pdfcpu Backend for PDF Wrapper",
+        "description": "Create a pdfcpu-based implementation of the PDFLibrary interface that provides robust AcroForm extraction capabilities with proper field type detection, value extraction, and property handling according to PDF specifications",
+        "details": "Implement a complete pdfcpu backend for the PDF wrapper interface with focus on AcroForm functionality:\n\n```go\n// internal/pdf/wrapper/pdfcpu_backend.go\npackage wrapper\n\nimport (\n    \"github.com/pdfcpu/pdfcpu/pkg/api\"\n    \"github.com/pdfcpu/pdfcpu/pkg/pdfcpu\"\n    \"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model\"\n)\n\ntype PDFCPUBackend struct {\n    ctx      *model.Context\n    reader   io.Reader\n    filePath string\n}\n\nfunc NewPDFCPUBackend() *PDFCPUBackend {\n    return &PDFCPUBackend{}\n}\n\nfunc (p *PDFCPUBackend) Open(reader io.Reader) (PDFDocument, error) {\n    // Read PDF into memory\n    data, err := io.ReadAll(reader)\n    if err != nil {\n        return nil, fmt.Errorf(\"failed to read PDF: %w\", err)\n    }\n    \n    // Parse with pdfcpu\n    ctx, err := api.ReadContext(bytes.NewReader(data), pdfcpu.NewDefaultConfiguration())\n    if err != nil {\n        return nil, fmt.Errorf(\"pdfcpu parse error: %w\", err)\n    }\n    \n    p.ctx = ctx\n    p.reader = bytes.NewReader(data)\n    return p, nil\n}\n\n// Implement AcroForm extraction with full field support\nfunc (p *PDFCPUBackend) ExtractFormFields() ([]FormField, error) {\n    if p.ctx.AcroForm == nil {\n        return []FormField{}, nil\n    }\n    \n    fields := []FormField{}\n    \n    // Process field tree recursively\n    for _, fieldRef := range p.ctx.AcroForm.Fields {\n        field, err := p.processFieldTree(fieldRef)\n        if err != nil {\n            continue // Log error but continue processing\n        }\n        fields = append(fields, field...)\n    }\n    \n    return fields, nil\n}\n\nfunc (p *PDFCPUBackend) processFieldTree(fieldRef model.Object) ([]FormField, error) {\n    fieldDict, err := p.ctx.DereferenceDict(fieldRef)\n    if err != nil {\n        return nil, err\n    }\n    \n    fields := []FormField{}\n    \n    // Check if this is a terminal field or intermediate node\n    if kids := fieldDict.ArrayEntry(\"Kids\"); kids != nil {\n        // Process children\n        for _, kidRef := range kids {\n            childFields, err := p.processFieldTree(kidRef)\n            if err != nil {\n                continue\n            }\n            fields = append(fields, childFields...)\n        }\n    } else {\n        // Terminal field - extract properties\n        field, err := p.extractFieldProperties(fieldDict)\n        if err != nil {\n            return nil, err\n        }\n        fields = append(fields, *field)\n    }\n    \n    return fields, nil\n}\n\nfunc (p *PDFCPUBackend) extractFieldProperties(dict model.Dict) (*FormField, error) {\n    field := &FormField{\n        Properties: make(map[string]interface{}),\n    }\n    \n    // Extract field name (handle inheritance)\n    field.Name = p.getInheritedFieldName(dict)\n    \n    // Determine field type\n    ft := dict.NameEntry(\"FT\")\n    if ft == nil {\n        ft = p.getInheritedEntry(dict, \"FT\")\n    }\n    \n    switch ft.String() {\n    case \"Tx\":\n        field.Type = \"text\"\n        field.Properties[\"multiline\"] = dict.BooleanEntry(\"Ff\")&4096 != 0\n        field.Properties[\"password\"] = dict.BooleanEntry(\"Ff\")&8192 != 0\n        field.Properties[\"maxLength\"] = dict.IntEntry(\"MaxLen\")\n    case \"Btn\":\n        flags := dict.IntEntry(\"Ff\")\n        if flags&65536 != 0 { // Pushbutton\n            field.Type = \"button\"\n        } else if flags&32768 != 0 { // Radio\n            field.Type = \"radio\"\n        } else { // Checkbox\n            field.Type = \"checkbox\"\n        }\n    case \"Ch\":\n        flags := dict.IntEntry(\"Ff\")\n        if flags&131072 != 0 { // Combo\n            field.Type = \"combobox\"\n        } else {\n            field.Type = \"listbox\"\n        }\n        field.Properties[\"multiSelect\"] = flags&2097152 != 0\n        \n        // Extract options\n        if opt := dict.ArrayEntry(\"Opt\"); opt != nil {\n            field.Options = p.extractOptions(opt)\n        }\n    case \"Sig\":\n        field.Type = \"signature\"\n    }\n    \n    // Extract value\n    field.Value = p.extractFieldValue(dict, field.Type)\n    \n    // Extract common properties\n    field.Properties[\"readOnly\"] = dict.IntEntry(\"Ff\")&1 != 0\n    field.Properties[\"required\"] = dict.IntEntry(\"Ff\")&2 != 0\n    field.Properties[\"noExport\"] = dict.IntEntry(\"Ff\")&4 != 0\n    \n    // Extract appearance and position\n    if widgets := p.getWidgetAnnotations(dict); len(widgets) > 0 {\n        // Use first widget for position\n        widget := widgets[0]\n        if rect := widget.ArrayEntry(\"Rect\"); rect != nil && len(rect) == 4 {\n            field.Bounds = &BoundingBox{\n                X1: rect[0].(model.Float),\n                Y1: rect[1].(model.Float),\n                X2: rect[2].(model.Float),\n                Y2: rect[3].(model.Float),\n            }\n        }\n    }\n    \n    // Extract default value\n    if dv := dict.Entry(\"DV\"); dv != nil {\n        field.DefaultValue = p.objectToValue(dv)\n    }\n    \n    // Extract tooltip/alternate text\n    if tu := dict.StringEntry(\"TU\"); tu != nil {\n        field.Properties[\"tooltip\"] = *tu\n    }\n    \n    return field, nil\n}\n\nfunc (p *PDFCPUBackend) extractFieldValue(dict model.Dict, fieldType string) interface{} {\n    v := dict.Entry(\"V\")\n    if v == nil {\n        return nil\n    }\n    \n    switch fieldType {\n    case \"checkbox\":\n        // Check for /Yes or checked state\n        if name, ok := v.(model.Name); ok {\n            return name.String() == \"Yes\"\n        }\n    case \"radio\":\n        // Return the selected option name\n        if name, ok := v.(model.Name); ok {\n            return name.String()\n        }\n    case \"text\", \"combobox\":\n        // Return string value\n        if str := dict.StringEntry(\"V\"); str != nil {\n            return *str\n        }\n    case \"listbox\":\n        // Can be single or multiple values\n        if arr, ok := v.(model.Array); ok {\n            values := []string{}\n            for _, item := range arr {\n                if str, ok := item.(model.StringLiteral); ok {\n                    values = append(values, str.Value())\n                }\n            }\n            return values\n        } else if str := dict.StringEntry(\"V\"); str != nil {\n            return []string{*str}\n        }\n    }\n    \n    return p.objectToValue(v)\n}\n\n// Helper to convert PDF objects to Go values\nfunc (p *PDFCPUBackend) objectToValue(obj model.Object) interface{} {\n    switch v := obj.(type) {\n    case model.StringLiteral:\n        return v.Value()\n    case model.Name:\n        return v.String()\n    case model.Integer:\n        return int(v)\n    case model.Float:\n        return float64(v)\n    case model.Boolean:\n        return bool(v)\n    case model.Array:\n        arr := []interface{}{}\n        for _, item := range v {\n            arr = append(arr, p.objectToValue(item))\n        }\n        return arr\n    default:\n        return nil\n    }\n}\n\n// Implement other PDFLibrary interface methods\nfunc (p *PDFCPUBackend) ExtractText(pageNum int) ([]ExtractedText, error) {\n    // Use pdfcpu's text extraction\n    text, err := api.ExtractPageContent(p.ctx, pageNum)\n    if err != nil {\n        return nil, err\n    }\n    \n    // Convert to our format\n    // Note: pdfcpu may not provide positioned text, so this might need enhancement\n    return []ExtractedText{\n        {\n            Text: text,\n            Page: pageNum,\n        },\n    }, nil\n}\n\nfunc (p *PDFCPUBackend) GetMetadata() (*Metadata, error) {\n    info := p.ctx.Info\n    if info == nil {\n        return &Metadata{}, nil\n    }\n    \n    return &Metadata{\n        Title:        info.Title,\n        Author:       info.Author,\n        Subject:      info.Subject,\n        Keywords:     info.Keywords,\n        Creator:      info.Creator,\n        Producer:     info.Producer,\n        CreationDate: info.CreationDate,\n        ModDate:      info.ModDate,\n    }, nil\n}\n```\n\nAdditional implementation considerations:\n\n1. **Field inheritance handling**: PDF form fields can inherit properties from parent fields\n```go\nfunc (p *PDFCPUBackend) getInheritedFieldName(dict model.Dict) string {\n    parts := []string{}\n    current := dict\n    \n    for current != nil {\n        if t := current.StringEntry(\"T\"); t != nil {\n            parts = append([]string{*t}, parts...)\n        }\n        \n        // Move to parent\n        if parent := current.DictEntry(\"Parent\"); parent != nil {\n            current = parent\n        } else {\n            break\n        }\n    }\n    \n    return strings.Join(parts, \".\")\n}\n```\n\n2. **Widget annotation handling**: Form fields can have multiple widget annotations\n```go\nfunc (p *PDFCPUBackend) getWidgetAnnotations(fieldDict model.Dict) []model.Dict {\n    widgets := []model.Dict{}\n    \n    // Check if field dict is also a widget (merged)\n    if fieldDict.Entry(\"Subtype\") == model.Name(\"Widget\") {\n        widgets = append(widgets, fieldDict)\n    }\n    \n    // Check Kids for widgets\n    if kids := fieldDict.ArrayEntry(\"Kids\"); kids != nil {\n        for _, kid := range kids {\n            if kidDict, err := p.ctx.DereferenceDict(kid); err == nil {\n                if kidDict.Entry(\"Subtype\") == model.Name(\"Widget\") {\n                    widgets = append(widgets, kidDict)\n                }\n            }\n        }\n    }\n    \n    return widgets\n}\n```\n\n3. **Configuration and optimization**:\n```go\nfunc (p *PDFCPUBackend) Configure(opts PDFOptions) error {\n    config := pdfcpu.NewDefaultConfiguration()\n    config.ValidationMode = pdfcpu.ValidationRelaxed // For better compatibility\n    config.OptimizeDuplicateContentStreams = true\n    \n    // Apply custom options\n    if opts.StrictValidation {\n        config.ValidationMode = pdfcpu.ValidationStrict\n    }\n    \n    p.config = config\n    return nil\n}\n```",
+        "testStrategy": "Comprehensive testing strategy for pdfcpu backend implementation:\n\n1. **Unit tests for field extraction**:\n   - Test each field type (text, checkbox, radio, combobox, listbox, signature)\n   - Verify correct value extraction for filled and empty fields\n   - Test field property extraction (required, readonly, multiline, etc.)\n   - Test field name inheritance from parent fields\n   - Test default value extraction\n\n2. **Integration tests with real PDFs**:\n   - Use IRS tax forms (complex field hierarchies)\n   - Test with Adobe sample forms from PDF reference\n   - Test with forms created by different PDF generators\n   - Verify extraction matches expected field structure\n\n3. **Edge case testing**:\n   - Forms with no AcroForm dictionary\n   - Malformed field dictionaries\n   - Fields with missing required entries\n   - Deeply nested field hierarchies\n   - Fields with multiple widget annotations\n   - Unicode field names and values\n\n4. **Performance benchmarks**:\n   - Compare extraction speed with native implementation\n   - Memory usage profiling for large forms\n   - Concurrent form extraction testing\n\n5. **Compatibility testing**:\n   - Test with PDF 1.4 through 2.0 forms\n   - XFA forms (should gracefully handle as unsupported)\n   - Hybrid AcroForm/XFA documents\n   - Encrypted PDFs with form fields\n\n6. **Validation against PDF specification**:\n   - Verify field flag interpretation matches PDF 1.7 spec\n   - Test appearance stream handling\n   - Validate field value formatting\n   - Check calculation order (CO array) handling\n\nTest implementation example:\n```go\nfunc TestPDFCPUFormExtraction(t *testing.T) {\n    backend := NewPDFCPUBackend()\n    \n    testCases := []struct {\n        name     string\n        pdfPath  string\n        expected []FormField\n    }{\n        {\n            name:    \"simple_text_form\",\n            pdfPath: \"testdata/forms/simple_text.pdf\",\n            expected: []FormField{\n                {\n                    Name:  \"name\",\n                    Type:  \"text\",\n                    Value: \"John Doe\",\n                    Properties: map[string]interface{}{\n                        \"maxLength\": 50,\n                    },\n                },\n            },\n        },\n        // More test cases...\n    }\n    \n    for _, tc := range testCases {\n        t.Run(tc.name, func(t *testing.T) {\n            file, _ := os.Open(tc.pdfPath)\n            defer file.Close()\n            \n            doc, err := backend.Open(file)\n            require.NoError(t, err)\n            \n            fields, err := doc.ExtractFormFields()\n            require.NoError(t, err)\n            \n            assert.Equal(t, tc.expected, fields)\n        })\n    }\n}\n```",
+        "status": "done",
+        "dependencies": [
+          11,
+          12,
+          13
+        ],
+        "priority": "high",
+        "subtasks": []
+      },
+      {
+        "id": 15,
+        "title": "Design and Implement Custom PDF Parser from Scratch",
+        "description": "Build a complete PDF parser from scratch following PDF 1.4/1.7 specifications, providing full control over form extraction and document parsing without relying on external libraries",
+        "details": "Implement a comprehensive PDF parser with complete control over parsing logic:\n\n```go\n// internal/pdf/custom/parser.go\npackage custom\n\ntype CustomPDFParser struct {\n    reader      io.ReadSeeker\n    version     string\n    xrefTable   *CrossReferenceTable\n    trailer     Dictionary\n    catalog     *Catalog\n    pageTree    *PageTree\n    objectCache map[ObjectID]PDFObject\n}\n\n// Core parsing methods\nfunc (p *CustomPDFParser) Parse() error {\n    // 1. Parse PDF header\n    if err := p.parseHeader(); err != nil {\n        return fmt.Errorf(\"header parse failed: %w\", err)\n    }\n    \n    // 2. Locate and parse xref table\n    if err := p.parseXRefTable(); err != nil {\n        return fmt.Errorf(\"xref parse failed: %w\", err)\n    }\n    \n    // 3. Parse trailer dictionary\n    if err := p.parseTrailer(); err != nil {\n        return fmt.Errorf(\"trailer parse failed: %w\", err)\n    }\n    \n    // 4. Load document catalog\n    if err := p.loadCatalog(); err != nil {\n        return fmt.Errorf(\"catalog load failed: %w\", err)\n    }\n    \n    return nil\n}\n\n// internal/pdf/custom/lexer.go\ntype PDFLexer struct {\n    reader   *bufio.Reader\n    position int64\n    buffer   []byte\n}\n\nfunc (l *PDFLexer) NextToken() (Token, error) {\n    // Skip whitespace\n    // Identify token type: number, string, name, array, dict, etc.\n    // Return parsed token\n}\n\n// internal/pdf/custom/objects.go\ntype PDFObject interface {\n    Type() ObjectType\n    String() string\n}\n\ntype Dictionary map[Name]PDFObject\ntype Array []PDFObject\ntype Stream struct {\n    Dict Dictionary\n    Data []byte\n}\n\n// internal/pdf/custom/acroform.go\ntype AcroFormParser struct {\n    parser     *CustomPDFParser\n    formDict   Dictionary\n    fieldCache map[string]*FormField\n}\n\nfunc (a *AcroFormParser) ParseAcroForm(catalog Dictionary) (*AcroForm, error) {\n    // Extract AcroForm dictionary\n    acroFormObj := catalog.Get(\"AcroForm\")\n    if acroFormObj == nil {\n        return nil, nil // No forms\n    }\n    \n    // Parse form dictionary\n    formDict, err := a.parser.resolveIndirectObject(acroFormObj)\n    if err != nil {\n        return err\n    }\n    \n    // Parse field tree\n    fields, err := a.parseFieldTree(formDict.Get(\"Fields\"))\n    if err != nil {\n        return err\n    }\n    \n    return &AcroForm{\n        Fields:          fields,\n        NeedAppearances: formDict.GetBool(\"NeedAppearances\"),\n        SigFlags:        formDict.GetInt(\"SigFlags\"),\n        CO:              a.parseCO(formDict.Get(\"CO\")),\n        DR:              a.parseResources(formDict.Get(\"DR\")),\n        DA:              formDict.GetString(\"DA\"),\n        Q:               formDict.GetInt(\"Q\"),\n    }, nil\n}\n\nfunc (a *AcroFormParser) parseFieldTree(fieldsObj PDFObject) ([]*FormField, error) {\n    // Handle field inheritance\n    // Parse field dictionaries recursively\n    // Resolve widget annotations\n    // Extract field values and properties\n}\n\n// internal/pdf/custom/content_stream.go\ntype ContentStreamParser struct {\n    lexer    *PDFLexer\n    graphics *GraphicsState\n    resources Dictionary\n}\n\nfunc (c *ContentStreamParser) Parse(stream []byte) ([]ContentObject, error) {\n    // Parse PDF content stream operators\n    // Handle text, graphics, and image operators\n    // Track graphics state changes\n    // Extract positioned content\n}\n\n// internal/pdf/custom/filters.go\ntype FilterDecoder interface {\n    Decode(data []byte, params Dictionary) ([]byte, error)\n}\n\nvar filterDecoders = map[string]FilterDecoder{\n    \"FlateDecode\":    &FlateDecoder{},\n    \"ASCIIHexDecode\": &ASCIIHexDecoder{},\n    \"ASCII85Decode\":  &ASCII85Decoder{},\n    \"LZWDecode\":      &LZWDecoder{},\n    \"RunLengthDecode\": &RunLengthDecoder{},\n}\n\n// internal/pdf/custom/encryption.go\ntype EncryptionHandler struct {\n    algorithm string\n    keyLength int\n    permissions uint32\n}\n\nfunc (e *EncryptionHandler) DecryptObject(obj PDFObject, objID ObjectID) (PDFObject, error) {\n    // Handle standard security handler\n    // Support RC4 and AES encryption\n    // Decrypt strings and streams\n}\n\n// Integration with wrapper interface\ntype CustomPDFBackend struct {\n    parser *CustomPDFParser\n}\n\nfunc (c *CustomPDFBackend) Open(reader io.Reader) (PDFDocument, error) {\n    seeker, ok := reader.(io.ReadSeeker)\n    if !ok {\n        // Buffer the reader if not seekable\n        data, err := io.ReadAll(reader)\n        if err != nil {\n            return nil, err\n        }\n        seeker = bytes.NewReader(data)\n    }\n    \n    parser := &CustomPDFParser{\n        reader:      seeker,\n        objectCache: make(map[ObjectID]PDFObject),\n    }\n    \n    if err := parser.Parse(); err != nil {\n        return nil, err\n    }\n    \n    return &customDocument{parser: parser}, nil\n}\n\nfunc (c *CustomPDFBackend) ExtractFormFields() ([]FormField, error) {\n    acroParser := &AcroFormParser{\n        parser:     c.parser,\n        fieldCache: make(map[string]*FormField),\n    }\n    \n    acroForm, err := acroParser.ParseAcroForm(c.parser.catalog)\n    if err != nil {\n        return nil, err\n    }\n    \n    if acroForm == nil {\n        return []FormField{}, nil\n    }\n    \n    return acroParser.ConvertToFormFields(acroForm.Fields)\n}",
+        "testStrategy": "Comprehensive testing strategy for custom PDF parser:\n\n1. **PDF structure parsing tests**:\n   - Test header parsing for various PDF versions (1.0-1.7)\n   - Verify cross-reference table parsing (standard and compressed)\n   - Test trailer dictionary extraction\n   - Validate object parsing for all PDF object types\n\n2. **AcroForm parsing tests**:\n   - Test with PDF reference example forms\n   - Verify field inheritance handling\n   - Test all field types: text, checkbox, radio, combo, list, signature\n   - Validate field value extraction and formatting\n   - Test with nested field hierarchies\n\n3. **Content stream parsing tests**:\n   - Test all text operators (BT, ET, Tf, Tm, Tj, TJ, etc.)\n   - Verify graphics state tracking\n   - Test coordinate transformations\n   - Validate font and encoding handling\n\n4. **Filter and encryption tests**:\n   - Test all standard filters (Flate, ASCII85, etc.)\n   - Verify encryption/decryption with test PDFs\n   - Test password-protected documents\n\n5. **Integration tests**:\n   - Compare output with pdfcpu for same documents\n   - Verify form field extraction matches expected values\n   - Test with real-world PDF forms\n   - Performance benchmarks vs other implementations\n\n6. **Error handling tests**:\n   - Test with malformed PDFs\n   - Verify graceful handling of missing objects\n   - Test recovery from parsing errors",
+        "status": "pending",
+        "dependencies": [
+          2,
+          12,
+          13,
+          "14"
+        ],
+        "priority": "low",
         "subtasks": []
       }
     ],
     "metadata": {
       "created": "2025-06-20T03:09:52.219Z",
-      "updated": "2025-06-20T03:09:52.219Z",
+      "updated": "2025-06-20T06:06:23.400Z",
       "description": "Tasks for master context"
     }
   }

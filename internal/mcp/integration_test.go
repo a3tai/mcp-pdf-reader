@@ -38,7 +38,10 @@ func TestServerIntegration(t *testing.T) {
 	}
 
 	// Create PDF service
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 
 	// Create MCP server
 	server, err := NewServer(cfg, pdfService)
@@ -67,7 +70,10 @@ func TestServerToolsRegistration(t *testing.T) {
 		MaxFileSize:  1024 * 1024,
 	}
 
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 	server, err := NewServer(cfg, pdfService)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
@@ -92,7 +98,10 @@ func TestServerRunStdio(t *testing.T) {
 		MaxFileSize:  1024 * 1024,
 	}
 
-	pdfService := pdf.NewService(cfg.MaxFileSize)
+	pdfService, err := pdf.NewService(cfg.MaxFileSize, cfg.PDFDirectory)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 	server, err := NewServer(cfg, pdfService)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
@@ -155,17 +164,22 @@ func TestServerConfiguration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pdfService := pdf.NewService(tt.config.MaxFileSize)
-			server, err := NewServer(tt.config, pdfService)
+			pdfService, err := pdf.NewService(tt.config.MaxFileSize, tt.config.PDFDirectory)
+			if err != nil && tt.valid {
+				t.Fatalf("Failed to create PDF service: %v", err)
+			}
+			if pdfService != nil {
+				server, err := NewServer(tt.config, pdfService)
 
-			if tt.valid && err != nil {
-				t.Errorf("expected valid config to succeed, got error: %v", err)
-			}
-			if !tt.valid && err == nil {
-				t.Error("expected invalid config to fail")
-			}
-			if tt.valid && server == nil {
-				t.Error("expected server to be created for valid config")
+				if tt.valid && err != nil {
+					t.Errorf("expected valid config to succeed, got error: %v", err)
+				}
+				if !tt.valid && err == nil {
+					t.Error("expected invalid config to fail")
+				}
+				if tt.valid && server == nil {
+					t.Error("expected server to be created")
+				}
 			}
 		})
 	}

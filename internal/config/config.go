@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -83,12 +82,8 @@ func LoadFromFlags() (*Config, error) {
 
 	populateConfigFromViper(cfg)
 
-	// Expand paths if needed
-	if cfg.PDFDirectory != "" {
-		if expandedPath, err := filepath.Abs(cfg.PDFDirectory); err == nil {
-			cfg.PDFDirectory = expandedPath
-		}
-	}
+	// Use PDF directory as provided
+	// Don't try to expand or modify it - let the caller handle any placeholders
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -209,14 +204,8 @@ func (c *Config) Validate() error {
 		return errors.New("PDF directory cannot be empty")
 	}
 
-	// Check if PDF directory exists, create if it doesn't
-	if _, err := os.Stat(c.PDFDirectory); os.IsNotExist(err) {
-		if err := os.MkdirAll(c.PDFDirectory, DefaultDirPerm); err != nil {
-			return fmt.Errorf("cannot create PDF directory %s: %w", c.PDFDirectory, err)
-		}
-	} else if err != nil {
-		return fmt.Errorf("cannot access PDF directory %s: %w", c.PDFDirectory, err)
-	}
+	// Don't validate directory existence here - it may be a placeholder
+	// that will be resolved by the editor or it may not exist yet
 
 	// Validate max file size
 	if c.MaxFileSize <= 0 {

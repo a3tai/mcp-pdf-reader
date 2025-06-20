@@ -1,0 +1,142 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": 1,
+        "title": "Setup Go Project Structure and MCP Server Foundation",
+        "description": "Initialize the Go project with proper module structure, implement basic MCP server protocol handler, and establish the core architecture for PDF processing",
+        "details": "Create Go module with go.mod (require go 1.21+). Implement MCP server following the Model Context Protocol specification:\n\n```go\n// main.go\npackage main\n\nimport (\n    \"github.com/yourusername/mcp-pdf-reader/internal/server\"\n    \"github.com/yourusername/mcp-pdf-reader/internal/pdf\"\n)\n\n// internal/server/mcp.go\ntype MCPServer struct {\n    pdfEngine *pdf.Engine\n    tools     map[string]Tool\n}\n\n// Implement MCP protocol methods: Initialize, ListTools, CallTool\n```\n\nSetup directory structure:\n- /cmd/mcp-pdf-reader/\n- /internal/server/ (MCP protocol handling)\n- /internal/pdf/ (PDF processing engine)\n- /internal/extractors/ (content extractors)\n- /pkg/models/ (data models)\n- /docs/examples/ (test PDFs)\n- /test/",
+        "testStrategy": "Unit tests for MCP message handling, integration tests for server startup/shutdown, validate tool registration and basic protocol compliance. Test with mock PDF operations to ensure server responds correctly to MCP requests.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 2,
+        "title": "Implement Core PDF Parser with Validation",
+        "description": "Build the foundational PDF parsing engine that can read, validate, and parse basic PDF file structure according to PDF 1.4/1.7 specifications",
+        "details": "Implement PDF parser using pure Go (no CGO dependencies):\n\n```go\n// internal/pdf/parser.go\ntype PDFParser struct {\n    file     io.ReadSeeker\n    xref     *CrossReferenceTable\n    trailer  map[string]Object\n}\n\nfunc (p *PDFParser) Parse() error {\n    // 1. Read PDF header (%PDF-1.x)\n    // 2. Parse cross-reference table\n    // 3. Read trailer dictionary\n    // 4. Build object catalog\n}\n\n// internal/pdf/validator.go\nfunc ValidatePDF(path string) (*ValidationResult, error) {\n    // Check file signature\n    // Verify xref table\n    // Validate object structure\n}\n```\n\nConsider using pdfcpu (Apache 2.0 license) as a base library or reference implementation. Implement pdf_validate_file MCP tool.",
+        "testStrategy": "Test with various PDF versions (1.4, 1.7), corrupted files, and edge cases. Validate against example PDFs in docs/examples/. Ensure proper error handling for malformed PDFs.",
+        "priority": "high",
+        "dependencies": [
+          1
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 3,
+        "title": "Build Content Stream Parser for Text Extraction",
+        "description": "Implement PDF content stream parsing to extract basic text content, handling PDF operators and text positioning commands",
+        "details": "Parse PDF content streams and implement text extraction:\n\n```go\n// internal/pdf/content_stream.go\ntype ContentStreamParser struct {\n    stream []byte\n    state  GraphicsState\n    text   []ExtractedText\n}\n\n// Handle PDF operators: BT, ET, Tf, Tm, Tj, TJ\nfunc (p *ContentStreamParser) parseOperator(op string, operands []Object) {\n    switch op {\n    case \"BT\": // Begin text\n    case \"Tf\": // Set font\n    case \"Tm\": // Text matrix\n    case \"Tj\": // Show text\n    }\n}\n\n// internal/extractors/text.go\nfunc ExtractText(page *PDFPage) (string, error) {\n    // Parse content stream\n    // Extract text runs\n    // Join into coherent text\n}\n```\n\nImplement pdf_read_file MCP tool for basic text extraction.",
+        "testStrategy": "Test text extraction accuracy against known PDFs with various fonts, encodings, and layouts. Compare output with expected text content. Verify handling of special characters and Unicode.",
+        "priority": "high",
+        "dependencies": [
+          2
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 4,
+        "title": "Implement Coordinate System and Positioned Text Extraction",
+        "description": "Add coordinate tracking, transformation matrix handling, and positioned text extraction with bounding boxes and formatting information",
+        "details": "Enhance text extraction with positioning:\n\n```go\n// internal/pdf/coordinates.go\ntype TransformMatrix [6]float64\n\nfunc (tm TransformMatrix) Transform(x, y float64) (float64, float64) {\n    // Apply transformation matrix\n    return tm[0]*x + tm[2]*y + tm[4], tm[1]*x + tm[3]*y + tm[5]\n}\n\n// pkg/models/text.go\ntype ExtractedText struct {\n    Text   string      `json:\"text\"`\n    Page   int         `json:\"page\"`\n    Bounds BoundingBox `json:\"bounds\"`\n    Font   FontInfo    `json:\"font\"`\n}\n\n// internal/extractors/positioned_text.go\nfunc ExtractStructuredText(page *PDFPage) ([]ExtractedText, error) {\n    // Track current transformation matrix\n    // Calculate absolute positions\n    // Group into words/lines\n    // Preserve font information\n}\n```\n\nImplement pdf_extract_structured MCP tool.",
+        "testStrategy": "Validate coordinate accuracy by extracting known positioned elements. Test transformation matrix calculations. Verify bounding boxes align with visual representation.",
+        "priority": "high",
+        "dependencies": [
+          3
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 5,
+        "title": "Develop Line and Paragraph Detection Algorithms",
+        "description": "Implement intelligent grouping of positioned text into logical lines and paragraphs based on spatial analysis and proximity",
+        "details": "Group text elements into semantic units:\n\n```go\n// internal/extractors/layout.go\ntype LineDetector struct {\n    tolerance float64 // Y-axis tolerance for same line\n}\n\nfunc (ld *LineDetector) GroupIntoLines(texts []ExtractedText) []TextLine {\n    // Sort by Y coordinate (top to bottom)\n    // Group texts with similar Y values\n    // Sort each line by X coordinate\n    // Handle RTL text if needed\n}\n\ntype ParagraphDetector struct {\n    lineSpacing float64\n    indentSize  float64\n}\n\nfunc (pd *ParagraphDetector) GroupIntoParagraphs(lines []TextLine) []Paragraph {\n    // Analyze line spacing\n    // Detect paragraph breaks\n    // Identify indentation patterns\n    // Group related lines\n}\n```\n\nEnhance pdf_extract_structured output with line/paragraph information.",
+        "testStrategy": "Test with documents having various layouts: multi-column, mixed fonts, different line spacings. Verify correct paragraph detection and line ordering.",
+        "priority": "medium",
+        "dependencies": [
+          4
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 6,
+        "title": "Implement Image and Graphics Extraction",
+        "description": "Extract embedded images, vector graphics, and other non-text content with positioning information and metadata",
+        "details": "Extract images and graphics from PDF:\n\n```go\n// internal/extractors/images.go\ntype ImageExtractor struct {\n    decoder map[string]ImageDecoder\n}\n\nfunc (ie *ImageExtractor) ExtractImages(page *PDFPage) ([]ExtractedImage, error) {\n    // Find image XObjects\n    // Decode image data (JPEG, PNG, etc.)\n    // Calculate positioning\n    // Extract metadata\n}\n\n// pkg/models/image.go\ntype ExtractedImage struct {\n    Page     int         `json:\"page\"`\n    Bounds   BoundingBox `json:\"bounds\"`\n    Format   string      `json:\"format\"`\n    Data     []byte      `json:\"data,omitempty\"`\n    DataURL  string      `json:\"dataUrl\"`\n    Metadata ImageMeta   `json:\"metadata\"`\n}\n\n// Handle inline images (BI/EI) and XObject images (Do)\n```\n\nImplement pdf_extract_images MCP tool.",
+        "testStrategy": "Test with PDFs containing various image formats (JPEG, PNG, TIFF). Verify correct positioning and data extraction. Test inline vs XObject images.",
+        "priority": "medium",
+        "dependencies": [
+          4
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 7,
+        "title": "Build Form Field Detection and Extraction",
+        "description": "Detect and extract interactive form fields including text fields, checkboxes, radio buttons, and dropdowns with their values and properties",
+        "details": "Extract form fields from AcroForms:\n\n```go\n// internal/extractors/forms.go\ntype FormExtractor struct {\n    catalog *PDFCatalog\n}\n\nfunc (fe *FormExtractor) ExtractForms(doc *PDFDocument) ([]FormField, error) {\n    // Get AcroForm dictionary\n    // Parse field tree\n    // Extract field properties\n    // Get current values\n}\n\n// pkg/models/form.go\ntype FormField struct {\n    Name       string      `json:\"name\"`\n    Type       string      `json:\"type\"` // text, checkbox, radio, select\n    Value      interface{} `json:\"value\"`\n    Options    []string    `json:\"options,omitempty\"`\n    Required   bool        `json:\"required\"`\n    Bounds     BoundingBox `json:\"bounds\"`\n    Validation Validation  `json:\"validation,omitempty\"`\n}\n```\n\nImplement pdf_extract_forms MCP tool.",
+        "testStrategy": "Test with fillable PDF forms, both empty and filled. Verify field type detection, value extraction, and validation rules. Test nested field hierarchies.",
+        "priority": "medium",
+        "dependencies": [
+          4
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 8,
+        "title": "Develop Table Detection Algorithm",
+        "description": "Implement spatial analysis algorithms to detect and extract table structures with rows, columns, and cell content",
+        "details": "Detect tables using spatial analysis:\n\n```go\n// internal/extractors/tables.go\ntype TableDetector struct {\n    minCellGap   float64\n    alignTolerance float64\n}\n\nfunc (td *TableDetector) DetectTables(texts []ExtractedText) ([]Table, error) {\n    // 1. Find aligned text clusters\n    // 2. Detect column boundaries\n    // 3. Identify row separations\n    // 4. Build cell matrix\n    // 5. Handle merged cells\n}\n\n// pkg/models/table.go\ntype Table struct {\n    Page       int         `json:\"page\"`\n    Bounds     BoundingBox `json:\"bounds\"`\n    Rows       int         `json:\"rows\"`\n    Columns    int         `json:\"columns\"`\n    Cells      [][]Cell    `json:\"cells\"`\n    Confidence float64     `json:\"confidence\"`\n}\n\n// Use heuristics: vertical alignment, consistent spacing, grid patterns\n```\n\nImplement pdf_extract_tables MCP tool.",
+        "testStrategy": "Test with various table layouts: simple grids, merged cells, nested tables. Measure detection accuracy and confidence scores. Compare with ground truth annotations.",
+        "priority": "medium",
+        "dependencies": [
+          5
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 9,
+        "title": "Implement Advanced Query Engine",
+        "description": "Build a query system that allows searching and filtering PDF content by type, position, formatting, and text patterns",
+        "details": "Create flexible query interface:\n\n```go\n// internal/query/engine.go\ntype QueryEngine struct {\n    index ContentIndex\n}\n\ntype Query struct {\n    Type      string      `json:\"type,omitempty\"` // text, image, table\n    Pattern   string      `json:\"pattern,omitempty\"`\n    Page      *int        `json:\"page,omitempty\"`\n    Region    *BoundingBox `json:\"region,omitempty\"`\n    FontSize  *float64    `json:\"fontSize,omitempty\"`\n}\n\nfunc (qe *QueryEngine) Query(doc *PDFDocument, query Query) ([]QueryResult, error) {\n    // Parse query parameters\n    // Filter by content type\n    // Apply spatial filters\n    // Match text patterns\n    // Score and rank results\n}\n\n// Support regex patterns, fuzzy matching, proximity search\n```\n\nImplement pdf_query_content MCP tool.",
+        "testStrategy": "Test various query combinations: spatial queries, pattern matching, multi-criteria filters. Verify performance with large documents. Test edge cases and invalid queries.",
+        "priority": "low",
+        "dependencies": [
+          6,
+          7,
+          8
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 10,
+        "title": "Create Document Intelligence and Analysis Layer",
+        "description": "Implement document type classification, structure analysis, and comprehensive document intelligence features",
+        "details": "Build document understanding capabilities:\n\n```go\n// internal/intelligence/analyzer.go\ntype DocumentAnalyzer struct {\n    extractors map[string]Extractor\n    classifier *DocumentClassifier\n}\n\nfunc (da *DocumentAnalyzer) Analyze(doc *PDFDocument) (*DocumentAnalysis, error) {\n    // Extract all content types\n    // Detect document structure\n    // Classify document type\n    // Map relationships\n    // Generate insights\n}\n\n// pkg/models/analysis.go\ntype DocumentAnalysis struct {\n    Type       string           `json:\"type\"` // invoice, report, form, etc.\n    Sections   []Section        `json:\"sections\"`\n    Statistics ContentStats     `json:\"statistics\"`\n    Quality    QualityMetrics   `json:\"quality\"`\n    Suggestions []string        `json:\"suggestions\"`\n}\n\n// Use heuristics and patterns for classification\n// Future: integrate ML models for better accuracy\n```\n\nImplement pdf_analyze_document MCP tool.",
+        "testStrategy": "Test with diverse document types: invoices, reports, academic papers. Validate classification accuracy. Test section detection and relationship mapping.",
+        "priority": "low",
+        "dependencies": [
+          8,
+          9
+        ],
+        "status": "pending",
+        "subtasks": []
+      }
+    ],
+    "metadata": {
+      "created": "2025-06-20T03:09:52.219Z",
+      "updated": "2025-06-20T03:09:52.219Z",
+      "description": "Tasks for master context"
+    }
+  }
+}

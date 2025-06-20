@@ -77,6 +77,29 @@ pids
 # Cross-platform binaries (build artifacts)
 mcp-pdf-reader-*
 
+# Internal documentation (not for public repo)
+docs/internal-notes/
+
 # Backup files
 *.bak
 *.backup
+
+# Added by Task Master AI
+# Logs
+logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev-debug.log
+# Dependency directories
+node_modules/
+# Environment variables
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# OS specific

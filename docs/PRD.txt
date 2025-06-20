@@ -1,0 +1,532 @@
+# MCP PDF Reader - Product Requirements Document
+
+## Overview
+
+The MCP PDF Reader is an open-source Model Context Protocol (MCP) server that transforms how AI assistants and applications interact with PDF documents. Moving beyond basic text extraction, this project aims to provide comprehensive structured data extraction capabilities, enabling AI systems to understand PDF documents as richly formatted, spatially-aware, and semantically meaningful content.
+
+### Problem Statement
+Current PDF processing tools for AI systems have significant limitations:
+- Extract only plain text without formatting or positioning information
+- Cannot identify or preserve document structures (tables, forms, sections)
+- Lack spatial understanding of content relationships
+- Cannot extract and process non-text elements effectively
+- Provide no semantic understanding of document organization
+
+### Target Users
+- **AI Application Developers**: Building document-processing AI solutions
+- **AI Assistant Users**: Using Claude Desktop, Zed editor, or other MCP-compatible tools
+- **Enterprise Developers**: Automating document workflows and data extraction
+- **Research Teams**: Processing academic papers and technical documentation
+- **Accessibility Developers**: Creating screen reader and accessibility tools
+
+### Value Proposition
+- **Structured Understanding**: Extract PDF content with full positioning, formatting, and structural information
+- **Semantic Intelligence**: Understand relationships between content elements
+- **Standards Compliance**: Built on official Adobe PDF 1.4 and PDF 1.7 specifications
+- **MCP Protocol**: Seamless integration with AI assistants and tools
+- **Open Source**: Community-driven development with transparent roadmap
+- **MIT License**: Ensures maximum compatibility and adoption with MIT-compatible dependencies only
+- **Pure Go Implementation**: No CGO dependencies, ensuring easy cross-platform compilation and deployment
+
+## Core Features
+
+### 1. Positioned Text Extraction
+**What it does**: Extracts text with precise X,Y coordinates and formatting information
+**Why it's important**: Enables spatial understanding and layout preservation
+**How it works**:
+- Parses PDF content streams to extract text positioning operators
+- Preserves font family, size, weight, color, and style information
+- Groups text into logical lines and paragraphs based on positioning
+- Provides word-level granularity with bounding boxes
+- Normalizes coordinates across different page sizes and orientations
+
+### 2. Multi-Format Content Extraction
+**What it does**: Extracts images, forms, annotations, and vector graphics
+**Why it's important**: Complete document understanding beyond text
+**How it works**:
+- Binary image extraction with positioning and metadata
+- Form field detection with types, values, and validation rules
+- Annotation processing for comments, highlights, and links
+- Basic vector graphics support for drawings and diagrams
+- Content confidence scoring for quality assessment
+
+### 3. Intelligent Structure Detection
+**What it does**: Automatically recognizes tables, sections, and document organization
+**Why it's important**: Enables semantic understanding of document content
+**How it works**:
+- Table detection using spatial analysis and content patterns
+- Document sectioning through header/paragraph/list identification
+- Content grouping based on proximity and alignment
+- Relationship mapping between related elements
+- Structure confidence metrics for reliability
+
+### 4. Advanced Query Interface
+**What it does**: Provides sophisticated content search and filtering capabilities
+**Why it's important**: Enables precise content discovery and analysis
+**How it works**:
+- Query by content type, position, formatting, or text patterns
+- Spatial queries to find content within page regions
+- Cross-page content aggregation and analysis
+- Document type and quality assessment
+- Batch processing for multiple documents
+
+### 5. MCP Protocol Integration
+**What it does**: Exposes all functionality through standardized MCP tools
+**Why it's important**: Seamless integration with AI assistants and applications
+**How it works**:
+- Tool-based interface for all extraction capabilities
+- Structured JSON responses with consistent schemas
+- Error handling and validation feedback
+- Progress reporting for long operations
+- Backward compatibility with existing tools
+
+## User Experience
+
+### User Personas
+
+#### 1. AI Developer (Alex)
+- **Background**: Building AI-powered document processing applications
+- **Goals**: Extract structured data from PDFs for automated workflows
+- **Pain Points**: Current tools only provide unstructured text
+- **Needs**: Reliable extraction with positioning and formatting
+
+#### 2. Research Assistant (Dr. Chen)
+- **Background**: Processing academic papers and technical documents
+- **Goals**: Extract figures, tables, and citations efficiently
+- **Pain Points**: Manual copying loses structure and references
+- **Needs**: Intelligent extraction that preserves document semantics
+
+#### 3. Enterprise Automation Engineer (Sarah)
+- **Background**: Automating business document workflows
+- **Goals**: Extract form data and process invoices/reports
+- **Pain Points**: Inconsistent document formats break automation
+- **Needs**: Robust extraction that handles various layouts
+
+### Key User Flows
+
+#### Basic Text Extraction Flow
+1. User calls `pdf_read_file` with file path
+2. System validates PDF and analyzes content type
+3. Returns extracted text with content analysis
+4. Suggests next steps based on content (e.g., asset extraction)
+
+#### Structured Data Extraction Flow
+1. User calls `pdf_extract_structured` for positioned text
+2. System parses content streams with coordinate tracking
+3. Returns JSON with text, positions, and formatting
+4. User can query specific regions or content types
+
+#### Table Extraction Flow
+1. User calls `pdf_extract_tables` on document
+2. System analyzes spatial relationships and patterns
+3. Identifies table boundaries and cell structure
+4. Returns structured table data with confidence scores
+
+#### Form Processing Flow
+1. User calls `pdf_extract_forms` on fillable PDF
+2. System identifies form fields and properties
+3. Extracts field values and validation rules
+4. Returns form schema with current values
+
+### UI/UX Considerations
+- **Clear Tool Naming**: Intuitive function names that describe purpose
+- **Progressive Disclosure**: Basic tools for simple needs, advanced for complex
+- **Helpful Error Messages**: Guide users to correct tool usage
+- **Performance Feedback**: Progress indicators for long operations
+- **Documentation Integration**: Examples and guides in tool descriptions
+
+## Technical Architecture
+
+### System Components
+
+#### 1. Core PDF Engine
+- **PDF Parser**: Reads and validates PDF file structure
+- **Content Stream Processor**: Interprets PDF content operators
+- **Coordinate Transformer**: Manages coordinate systems and transformations
+- **Font Manager**: Handles font encoding and text extraction
+- **Image Decoder**: Processes embedded images and graphics
+
+#### 2. Content Extractors
+- **Text Extractor**: Positioned text with formatting
+- **Table Detector**: Spatial analysis for table structures
+- **Form Processor**: Interactive form field extraction
+- **Image Extractor**: Binary image data with metadata
+- **Annotation Handler**: Comments and markup processing
+
+#### 3. Intelligence Layer
+- **Structure Analyzer**: Document organization detection
+- **Relationship Mapper**: Content element relationships
+- **Query Engine**: Advanced content search and filtering
+- **Confidence Scorer**: Quality metrics for extractions
+- **Document Classifier**: Automatic document type detection
+
+#### 4. MCP Server
+- **Protocol Handler**: MCP message processing
+- **Tool Registry**: Available tools and schemas
+- **Session Manager**: Client connection handling
+- **Error Handler**: Graceful error reporting
+- **Response Builder**: Structured JSON responses
+
+### Data Models
+
+#### ExtractedText
+```json
+{
+  "text": "string",
+  "page": "number",
+  "bounds": {
+    "x": "number",
+    "y": "number",
+    "width": "number",
+    "height": "number"
+  },
+  "font": {
+    "family": "string",
+    "size": "number",
+    "weight": "string",
+    "color": "string"
+  },
+  "confidence": "number"
+}
+```
+
+#### Table Structure
+```json
+{
+  "page": "number",
+  "bounds": "BoundingBox",
+  "rows": "number",
+  "columns": "number",
+  "cells": [{
+    "row": "number",
+    "column": "number",
+    "content": "ExtractedText",
+    "rowSpan": "number",
+    "columnSpan": "number"
+  }],
+  "confidence": "number"
+}
+```
+
+#### Form Field
+```json
+{
+  "name": "string",
+  "type": "text|checkbox|radio|select|button",
+  "value": "any",
+  "options": ["string"],
+  "required": "boolean",
+  "bounds": "BoundingBox",
+  "validation": "object"
+}
+```
+
+### APIs and Integration
+
+#### MCP Tools API
+- `pdf_server_info`: Server information and guidance
+- `pdf_validate_file`: Validate PDF structure
+- `pdf_read_file`: Basic text extraction
+- `pdf_extract_structured`: Positioned text extraction
+- `pdf_extract_tables`: Table detection and extraction
+- `pdf_extract_forms`: Form field processing
+- `pdf_extract_images`: Image extraction with data
+- `pdf_extract_annotations`: Annotation processing
+- `pdf_query_content`: Advanced content search
+- `pdf_analyze_document`: Document intelligence
+
+#### PDF Specification Compliance
+- **PDF 1.4**: Full support based on Adobe specification (docs/PDF14.pdf)
+- **PDF 1.7**: Extended features from ISO 32000-1 (docs/PDF17.pdf)
+- **Content Streams**: Direct interpretation of PDF operators
+- **Coordinate Systems**: Proper transformation handling
+- **Font Encoding**: Support for standard and embedded fonts
+
+### Infrastructure Requirements
+- **Runtime**: Go 1.21+ for performance and concurrency
+- **Memory**: Efficient streaming for large documents
+- **Storage**: Temporary file handling for processing
+- **Dependencies**: Minimal external dependencies (MIT-compatible licenses only)
+- **Platform Support**: Windows, macOS, Linux (pure Go ensures easy cross-compilation)
+- **License Compliance**: All libraries must have MIT-compatible licenses (MIT, BSD, Apache 2.0)
+- **Pure Go**: No CGO or external C dependencies - ensures portability and simple deployment
+
+## Development Roadmap
+
+### Phase 1: Foundation Enhancement (MVP)
+**Scope**: Core positioned text extraction and basic structure
+- Implement coordinate tracking in text extraction
+- Add font and formatting preservation
+- Create line and paragraph grouping logic
+- Develop word-level bounding boxes
+- Update MCP tools for structured output
+- Comprehensive testing with example PDFs
+
+**Deliverables**:
+- `pdf_extract_structured` tool implementation
+- Updated data models with positioning
+- Test suite for coordinate accuracy
+- Documentation and examples
+
+### Phase 2: Content Type Expansion
+**Scope**: Images, forms, and annotations
+- Binary image extraction with positioning
+- Form field detection and processing
+- Annotation content extraction
+- Basic vector graphics support
+- Content confidence scoring
+
+**Deliverables**:
+- `pdf_extract_images` tool
+- `pdf_extract_forms` tool
+- `pdf_extract_annotations` tool
+- Expanded test coverage
+- Performance benchmarks
+
+### Phase 3: Intelligence Layer
+**Scope**: Structure detection and relationships
+- Table detection algorithm implementation
+- Document section identification
+- Content grouping and relationships
+- Spatial analysis capabilities
+- Structure confidence metrics
+
+**Deliverables**:
+- `pdf_extract_tables` tool
+- `pdf_extract_sections` tool
+- `pdf_analyze_layout` tool
+- ML model integration (optional)
+- Accuracy benchmarks
+
+### Phase 4: Query and Analysis
+**Scope**: Advanced search and document intelligence
+- Query language implementation
+- Spatial search capabilities
+- Content aggregation features
+- Document classification
+- Batch processing support
+
+**Deliverables**:
+- `pdf_query_content` tool
+- `pdf_analyze_document` tool
+- `pdf_batch_process` tool
+- Query documentation
+- Performance optimization
+
+### Future Enhancements
+- OCR integration for scanned documents
+- Multi-language support improvements
+- Advanced table recognition with merged cells
+- Chart and graph data extraction
+- Semantic document understanding
+- Cloud storage integration
+
+## Logical Dependency Chain
+
+### 1. Core Infrastructure (Foundation)
+- PDF parsing and validation
+- Basic text extraction
+- MCP protocol implementation
+- Error handling framework
+- Test infrastructure setup
+
+### 2. Coordinate System (Enables positioning)
+- Content stream parser enhancement
+- Coordinate transformation logic
+- Bounding box calculations
+- Page dimension handling
+- Unit normalization
+
+### 3. Text Positioning (First visible enhancement)
+- Positioned text extraction
+- Font information preservation
+- Line detection algorithms
+- Paragraph grouping logic
+- Word segmentation
+
+### 4. Content Types (Expands capabilities)
+- Image extraction infrastructure
+- Form field detection
+- Annotation processing
+- Graphics handling
+- Metadata extraction
+
+### 5. Structure Detection (Adds intelligence)
+- Spatial analysis algorithms
+- Pattern recognition logic
+- Table detection implementation
+- Section identification
+- Relationship mapping
+
+### 6. Query Engine (Enables advanced usage)
+- Query language parser
+- Content indexing
+- Search algorithms
+- Result aggregation
+- Batch processing
+
+### 7. Intelligence Layer (Future vision)
+- Machine learning integration
+- Document classification
+- Quality assessment
+- Semantic understanding
+- Workflow automation
+
+## Risks and Mitigations
+
+### Technical Challenges
+
+#### Risk: PDF Format Complexity
+- **Challenge**: PDF specification is complex with many edge cases
+- **Mitigation**:
+  - Start with common PDF patterns (80/20 rule)
+  - Use official Adobe specifications as reference
+  - Implement robust error handling
+  - Build comprehensive test suite
+
+#### Risk: Performance Degradation
+- **Challenge**: Additional processing may slow extraction
+- **Mitigation**:
+  - Implement efficient streaming algorithms
+  - Use goroutines for parallel processing
+  - Cache parsed structures
+  - Provide performance benchmarks
+
+#### Risk: Coordinate System Accuracy
+- **Challenge**: Different PDF creators use various coordinate systems
+- **Mitigation**:
+  - Implement proper transformation matrices
+  - Test with diverse PDF sources
+  - Provide coordinate normalization
+  - Document limitations clearly
+
+### MVP Scoping
+
+#### Risk: Feature Creep
+- **Challenge**: Trying to implement too much in MVP
+- **Mitigation**:
+  - Focus on positioned text extraction first
+  - Defer complex features to later phases
+  - Get user feedback early
+  - Iterate based on real usage
+
+#### Risk: Backward Compatibility
+- **Challenge**: Breaking existing tool functionality
+- **Mitigation**:
+  - Keep existing tools unchanged
+  - Add new tools for new features
+  - Version the API properly
+  - Provide migration guides
+
+### Resource Constraints
+
+#### Risk: Development Complexity
+- **Challenge**: Implementing PDF parsing from scratch in pure Go
+- **Mitigation**:
+  - Leverage existing pure Go PDF libraries with MIT-compatible licenses only
+  - Avoid proprietary, GPL-licensed, or CGO-dependent libraries
+  - Focus on specific extraction needs
+  - Build incrementally with testing
+  - Engage community contributors
+  - Implement custom pure Go solutions where suitable libraries aren't available
+  - Benefit: Pure Go simplifies deployment and cross-platform support
+
+#### Risk: Testing Coverage
+- **Challenge**: Ensuring quality across PDF variations
+- **Mitigation**:
+  - Use example PDFs in docs/examples/
+  - Build automated test suite
+  - Implement fuzzing tests
+  - Collect real-world test cases
+
+## Appendix
+
+### Research Findings
+
+#### PDF Processing Libraries
+- **pdfcpu**: Pure Go PDF processing library (Apache 2.0 license - MIT compatible) ✅
+- **UniDoc**: Commercial PDF library (EXCLUDED - proprietary license)
+- **PDFBox** (Java): Reference implementation for comparison only (not Go)
+- **CGO-based libraries**: EXCLUDED - must maintain pure Go implementation
+- **Custom Implementation**: Direct specification-based parsing in pure Go (preferred approach)
+- **Note**: Only pure Go libraries with MIT-compatible licenses (MIT, BSD, Apache 2.0) can be used
+
+#### Performance Benchmarks
+- Text extraction: <100ms for 10-page document
+- Image extraction: <500ms per image
+- Table detection: <2s for complex tables
+- Memory usage: <100MB for typical documents
+
+#### Market Analysis
+- Growing demand for AI document processing
+- Limited MCP-compatible PDF tools
+- Opportunity for open-source leadership
+- Enterprise automation market expansion
+
+### Technical Specifications
+
+#### PDF Coordinate System
+- Origin: Bottom-left corner (0,0)
+- Units: Points (1/72 inch)
+- Transformations: CTM (Current Transformation Matrix)
+- Text positioning: Tm operator
+- Graphics state: Stack-based
+
+#### Content Stream Operators
+- **Text**: BT/ET, Tf, Tm, Tj, TJ
+- **Graphics**: m, l, c, re, S, f
+- **Images**: BI/EI, Do
+- **State**: q/Q, cm
+
+#### Testing Strategy
+- Unit tests for each extractor
+- Integration tests with example PDFs
+- Performance benchmarks
+- Coordinate accuracy validation
+- Cross-platform compatibility
+
+### Example Use Cases
+
+#### Invoice Processing
+```json
+{
+  "tool": "pdf_extract_tables",
+  "params": {"file": "invoice.pdf"},
+  "result": {
+    "tables": [{
+      "type": "line_items",
+      "data": [["Item", "Qty", "Price"], ...]
+    }]
+  }
+}
+```
+
+#### Form Data Extraction
+```json
+{
+  "tool": "pdf_extract_forms",
+  "params": {"file": "application.pdf"},
+  "result": {
+    "fields": {
+      "name": "John Doe",
+      "email": "john@example.com",
+      "submitted": true
+    }
+  }
+}
+```
+
+#### Research Paper Analysis
+```json
+{
+  "tool": "pdf_analyze_document",
+  "params": {"file": "paper.pdf"},
+  "result": {
+    "type": "academic_paper",
+    "sections": ["Abstract", "Introduction", "Methods"],
+    "figures": 5,
+    "tables": 3,
+    "references": 42
+  }
+}
+```

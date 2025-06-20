@@ -6,23 +6,25 @@ import (
 
 // Service handles PDF file operations by orchestrating various PDF components
 type Service struct {
-	maxFileSize int64
-	reader      *Reader
-	validator   *Validator
-	stats       *Stats
-	assets      *Assets
-	search      *Search
+	maxFileSize       int64
+	reader            *Reader
+	validator         *Validator
+	stats             *Stats
+	assets            *Assets
+	search            *Search
+	extractionService *ExtractionService
 }
 
 // NewService creates a new PDF service with all components
 func NewService(maxFileSize int64) *Service {
 	return &Service{
-		maxFileSize: maxFileSize,
-		reader:      NewReader(maxFileSize),
-		validator:   NewValidator(maxFileSize),
-		stats:       NewStats(maxFileSize),
-		assets:      NewAssets(maxFileSize),
-		search:      NewSearch(maxFileSize),
+		maxFileSize:       maxFileSize,
+		reader:            NewReader(maxFileSize),
+		validator:         NewValidator(maxFileSize),
+		stats:             NewStats(maxFileSize),
+		assets:            NewAssets(maxFileSize),
+		search:            NewSearch(maxFileSize),
+		extractionService: NewExtractionService(maxFileSize),
 	}
 }
 
@@ -185,6 +187,156 @@ IMPORTANT NOTES:
 	}
 
 	return result, nil
+}
+
+// ExtractStructured performs structured content extraction with positioning and formatting
+func (s *Service) ExtractStructured(req PDFExtractStructuredRequest) (*PDFExtractResult, error) {
+	// Convert to internal request format
+	extractReq := PDFExtractRequest{
+		Path:   req.Path,
+		Mode:   req.Mode,
+		Config: ExtractConfig(req.Config),
+		Query:  s.convertQuery(req.Query),
+	}
+
+	if extractReq.Mode == "" {
+		extractReq.Mode = "structured"
+	}
+
+	return s.extractionService.ExtractStructured(extractReq)
+}
+
+// ExtractTables performs table detection and extraction
+func (s *Service) ExtractTables(req PDFExtractTablesRequest) (*PDFExtractResult, error) {
+	extractReq := PDFExtractRequest{
+		Path:   req.Path,
+		Mode:   "table",
+		Config: ExtractConfig(req.Config),
+	}
+
+	return s.extractionService.ExtractTables(extractReq)
+}
+
+// ExtractSemantic performs semantic content grouping
+func (s *Service) ExtractSemantic(req PDFExtractSemanticRequest) (*PDFExtractResult, error) {
+	extractReq := PDFExtractRequest{
+		Path:   req.Path,
+		Mode:   "semantic",
+		Config: ExtractConfig(req.Config),
+	}
+
+	return s.extractionService.ExtractSemantic(extractReq)
+}
+
+// ExtractComplete performs comprehensive extraction of all content types
+func (s *Service) ExtractComplete(req PDFExtractCompleteRequest) (*PDFExtractResult, error) {
+	extractReq := PDFExtractRequest{
+		Path:   req.Path,
+		Mode:   "complete",
+		Config: ExtractConfig(req.Config),
+	}
+
+	return s.extractionService.ExtractComplete(extractReq)
+}
+
+// QueryContent searches extracted content using the provided query
+func (s *Service) QueryContent(req PDFQueryContentRequest) (*PDFQueryResult, error) {
+	queryReq := PDFQueryRequest(req)
+
+	result, err := s.extractionService.QueryContent(queryReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert back to MCP format
+	return &PDFQueryResult{
+		FilePath:   result.FilePath,
+		Query:      req.Query,
+		MatchCount: result.MatchCount,
+		Elements:   s.convertElements(result.Elements),
+		Summary:    result.Summary,
+	}, nil
+}
+
+// GetPageInfo returns detailed page information
+func (s *Service) GetPageInfo(req PDFGetPageInfoRequest) (*PDFPageInfoResult, error) {
+	path := req.Path
+	pages, err := s.extractionService.GetPageInfo(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert to MCP format
+	mcpPages := make([]PageInfo, len(pages))
+	for i, page := range pages {
+		mcpPages[i] = PageInfo{
+			Number:   page.Number,
+			Width:    page.Width,
+			Height:   page.Height,
+			Rotation: page.Rotation,
+			MediaBox: Rectangle{
+				X:      page.MediaBox.X,
+				Y:      page.MediaBox.Y,
+				Width:  page.MediaBox.Width,
+				Height: page.MediaBox.Height,
+			},
+		}
+	}
+
+	return &PDFPageInfoResult{
+		FilePath: path,
+		Pages:    mcpPages,
+	}, nil
+}
+
+// GetMetadata extracts comprehensive document metadata
+func (s *Service) GetMetadata(req PDFGetMetadataRequest) (*PDFMetadataResult, error) {
+	path := req.Path
+	metadata, err := s.extractionService.GetMetadata(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert to MCP format
+	mcpMetadata := DocumentMetadata{
+		Title:            metadata.Title,
+		Author:           metadata.Author,
+		Subject:          metadata.Subject,
+		Creator:          metadata.Creator,
+		Producer:         metadata.Producer,
+		Keywords:         metadata.Keywords,
+		PageLayout:       metadata.PageLayout,
+		PageMode:         metadata.PageMode,
+		Version:          metadata.Version,
+		Encrypted:        metadata.Encrypted,
+		CustomProperties: metadata.CustomProperties,
+	}
+
+	if metadata.CreationDate != "" {
+		mcpMetadata.CreationDate = metadata.CreationDate
+	}
+	if metadata.ModificationDate != "" {
+		mcpMetadata.ModificationDate = metadata.ModificationDate
+	}
+
+	return &PDFMetadataResult{
+		FilePath: path,
+		Metadata: mcpMetadata,
+	}, nil
+}
+
+// Helper methods for type conversion
+
+func (s *Service) convertQuery(q *ContentQuery) *ContentQuery {
+	if q == nil {
+		return nil
+	}
+
+	return q
+}
+
+func (s *Service) convertElements(elements []ContentElement) []ContentElement {
+	return elements
 }
 
 // ValidateConfiguration validates the service configuration

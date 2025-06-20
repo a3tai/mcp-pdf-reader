@@ -18,6 +18,10 @@ A robust **open source Model Context Protocol (MCP) server** for reading and ana
 - **🖼️ Visual Asset Extraction**: Detect and extract images from PDFs with format identification
 - **🔍 Smart Search**: Find PDF files with fuzzy search capabilities
 - **📊 Statistics**: Get comprehensive directory and file statistics
+- **🏗️ Structured Data Extraction**: Extract content with positioning coordinates, formatting, and semantic relationships
+- **📊 Table Detection**: Intelligent table structure recognition and data extraction
+- **🔍 Content Querying**: Search and filter extracted content using flexible criteria
+- **📋 Comprehensive Metadata**: Extract document properties, page information, and custom metadata
 - **🔄 Dual Mode Support**:
   - **Stdio Mode**: Standard MCP protocol for AI assistants (Zed, Claude Desktop, etc.)
   - **Server Mode**: HTTP REST API with SSE transport for web integration
@@ -28,10 +32,11 @@ A robust **open source Model Context Protocol (MCP) server** for reading and ana
 ## 🎯 Use Cases
 
 - **AI Code Editors**: Integrate with Zed editor for PDF document analysis
-- **Documentation Tools**: Extract and analyze technical documentation
-- **Research Assistants**: Process academic papers and research documents
-- **Content Management**: Organize and search large PDF collections
-- **Web Applications**: HTTP API for web-based PDF processing
+- **Documentation Tools**: Extract and analyze technical documentation with structure preservation
+- **Research Assistants**: Process academic papers and research documents with semantic understanding
+- **Data Extraction**: Extract structured data from forms, tables, and formatted documents
+- **Content Management**: Organize and search large PDF collections with intelligent querying
+- **Web Applications**: HTTP API for web-based PDF processing and analysis
 
 ## 📦 Installation
 
@@ -182,7 +187,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | mcp-pdf-read
 
 ## 📡 MCP Tools
 
-The server provides six main tools via the MCP protocol:
+The server provides comprehensive PDF analysis tools via the MCP protocol, including both basic extraction and advanced structured analysis:
 
 ### `pdf_read_file`
 Extract text content from a PDF file.
@@ -261,6 +266,155 @@ Get statistics about PDF files in a directory.
 ```json
 {
   "directory": "/home/user/documents"
+}
+```
+
+### `pdf_extract_structured`
+Extract structured content with positioning coordinates and formatting information.
+
+**Parameters:**
+- `path` (string): Full path to the PDF file
+- `mode` (string): Extraction mode - "raw", "structured", "semantic", "table", or "complete" (default: "structured")
+- `config` (object): Configuration options
+  - `extract_text` (bool): Extract text content
+  - `extract_images` (bool): Extract images
+  - `extract_tables` (bool): Extract tables
+  - `extract_forms` (bool): Extract form fields
+  - `extract_annotations` (bool): Extract annotations
+  - `include_coordinates` (bool): Include positioning coordinates
+  - `include_formatting` (bool): Include formatting information
+  - `pages` (array): Specific pages to extract (default: all)
+  - `min_confidence` (number): Minimum confidence threshold
+
+**Example:**
+```json
+{
+  "path": "/home/user/documents/form.pdf",
+  "mode": "structured",
+  "config": {
+    "extract_text": true,
+    "include_coordinates": true,
+    "include_formatting": true,
+    "pages": [1, 2, 3]
+  }
+}
+```
+
+### `pdf_extract_tables`
+Extract tabular data from PDF with structure preservation and cell-level analysis.
+
+**Parameters:**
+- `path` (string): Full path to the PDF file
+- `config` (object): Configuration options
+  - `include_coordinates` (bool): Include positioning coordinates
+  - `pages` (array): Specific pages to extract (default: all)
+  - `min_confidence` (number): Minimum confidence threshold
+
+**Example:**
+```json
+{
+  "path": "/home/user/documents/spreadsheet.pdf",
+  "config": {
+    "include_coordinates": true,
+    "min_confidence": 0.7
+  }
+}
+```
+
+### `pdf_extract_semantic`
+Extract content with semantic grouping and relationship detection.
+
+**Parameters:**
+- `path` (string): Full path to the PDF file
+- `config` (object): Configuration options
+  - `include_coordinates` (bool): Include positioning coordinates
+  - `include_formatting` (bool): Include formatting information
+  - `pages` (array): Specific pages to extract (default: all)
+  - `min_confidence` (number): Minimum confidence threshold
+
+**Example:**
+```json
+{
+  "path": "/home/user/documents/document.pdf",
+  "config": {
+    "include_coordinates": true,
+    "include_formatting": true
+  }
+}
+```
+
+### `pdf_extract_complete`
+Comprehensive extraction of all content types (text, images, tables, forms, annotations).
+
+**Parameters:**
+- `path` (string): Full path to the PDF file
+- `config` (object): Configuration options
+  - `pages` (array): Specific pages to extract (default: all)
+  - `min_confidence` (number): Minimum confidence threshold
+
+**Example:**
+```json
+{
+  "path": "/home/user/documents/complex.pdf",
+  "config": {
+    "pages": [1, 2, 3],
+    "min_confidence": 0.8
+  }
+}
+```
+
+### `pdf_query_content`
+Query and filter extracted PDF content using flexible search criteria.
+
+**Parameters:**
+- `path` (string): Full path to the PDF file
+- `query` (object): Query criteria for filtering content
+  - `content_types` (array): Content types to filter ("text", "image", "table", "form", "annotation")
+  - `pages` (array): Pages to search
+  - `text_query` (string): Text search query
+  - `min_confidence` (number): Minimum confidence threshold
+  - `bounding_box` (object): Spatial filter area
+    - `x` (number): X coordinate
+    - `y` (number): Y coordinate
+    - `width` (number): Width
+    - `height` (number): Height
+
+**Example:**
+```json
+{
+  "path": "/home/user/documents/report.pdf",
+  "query": {
+    "content_types": ["text", "table"],
+    "text_query": "revenue",
+    "pages": [1, 2, 3],
+    "min_confidence": 0.7
+  }
+}
+```
+
+### `pdf_get_page_info`
+Get detailed information about PDF pages including dimensions, layout, and properties.
+
+**Parameters:**
+- `path` (string): Full path to the PDF file
+
+**Example:**
+```json
+{
+  "path": "/home/user/documents/document.pdf"
+}
+```
+
+### `pdf_get_metadata`
+Extract comprehensive document metadata and properties.
+
+**Parameters:**
+- `path` (string): Full path to the PDF file
+
+**Example:**
+```json
+{
+  "path": "/home/user/documents/document.pdf"
 }
 ```
 

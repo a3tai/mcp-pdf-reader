@@ -138,6 +138,9 @@ func (r *Reader) extractTextContent(pdfReader *pdf.Reader) (string, error) {
 
 // analyzeContentType determines the type of content in the PDF
 func (r *Reader) analyzeContentType(textContent string, pdfReader *pdf.Reader) string {
+	// Minimum text length to consider content meaningful
+	const minMeaningfulTextLength = 50
+
 	// Check if we extracted meaningful text
 	cleanText := strings.TrimSpace(textContent)
 
@@ -149,7 +152,7 @@ func (r *Reader) analyzeContentType(textContent string, pdfReader *pdf.Reader) s
 	hasImages, _ := r.detectImages(pdfReader)
 
 	// Determine content type based on text and images
-	if len(textWithoutBreaks) == 0 {
+	if textWithoutBreaks == "" {
 		if hasImages {
 			return "scanned_images"
 		}
@@ -157,8 +160,8 @@ func (r *Reader) analyzeContentType(textContent string, pdfReader *pdf.Reader) s
 	}
 
 	// Consider it mostly text if we have substantial text content
-	// Rough heuristic: if text is less than 50 characters, it might be mostly images
-	if len(textWithoutBreaks) < 50 {
+	// Rough heuristic: if text is less than minimum threshold, it might be mostly images
+	if len(textWithoutBreaks) < minMeaningfulTextLength {
 		if hasImages {
 			return "scanned_images"
 		}

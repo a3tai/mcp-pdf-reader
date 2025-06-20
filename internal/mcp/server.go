@@ -145,9 +145,11 @@ func (s *Server) handlePDFReadFile(ctx context.Context, request mcp.CallToolRequ
 	// Add guidance based on content type
 	switch result.ContentType {
 	case "scanned_images":
-		responseText += "\n🔍 RECOMMENDATION: This PDF appears to contain scanned images with little or no extractable text. Consider using 'pdf_assets_file' to extract the images.\n"
+		responseText += "\n🔍 RECOMMENDATION: This PDF appears to contain scanned images with little or no " +
+			"extractable text. Consider using 'pdf_assets_file' to extract the images.\n"
 	case "mixed":
-		responseText += "\n💡 INFO: This PDF contains both text and images. You may want to use 'pdf_assets_file' to extract the images as well.\n"
+		responseText += "\n💡 INFO: This PDF contains both text and images. You may want to use " +
+			"'pdf_assets_file' to extract the images as well.\n"
 	case "no_content":
 		responseText += "\n⚠️  WARNING: This PDF appears to have no readable content or images.\n"
 	}

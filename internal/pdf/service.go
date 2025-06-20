@@ -87,7 +87,9 @@ func (s *Service) GetSupportedImageFormats() []string {
 }
 
 // PDFServerInfo returns comprehensive server information and usage guidance
-func (s *Service) PDFServerInfo(req PDFServerInfoRequest, serverName, version, defaultDirectory string) (*PDFServerInfoResult, error) {
+func (s *Service) PDFServerInfo(req PDFServerInfoRequest, serverName, version,
+	defaultDirectory string,
+) (*PDFServerInfoResult, error) {
 	// Get directory contents
 	directoryContents, err := s.search.FindPDFsInDirectory(defaultDirectory)
 	if err != nil {
@@ -106,8 +108,9 @@ func (s *Service) PDFServerInfo(req PDFServerInfoRequest, serverName, version, d
 		{
 			Name:        "pdf_assets_file",
 			Description: "Extract visual assets like images from a PDF file",
-			Usage:       "Use this tool when a PDF contains scanned images or when pdf_read_file indicates 'scanned_images' or 'mixed' content type. Extracts JPEG, PNG and other image formats.",
-			Parameters:  "path (required): Full absolute path to the PDF file",
+			Usage: "Use this tool when a PDF contains scanned images or when pdf_read_file indicates " +
+				"'scanned_images' or 'mixed' content type. Extracts JPEG, PNG and other image formats.",
+			Parameters: "path (required): Full absolute path to the PDF file",
 		},
 		{
 			Name:        "pdf_validate_file",
@@ -124,14 +127,17 @@ func (s *Service) PDFServerInfo(req PDFServerInfoRequest, serverName, version, d
 		{
 			Name:        "pdf_search_directory",
 			Description: "Search for PDF files in a directory with optional fuzzy search",
-			Usage:       "Use this tool to find PDF files in the default directory or any specified directory. Supports fuzzy search by filename.",
-			Parameters:  "directory (optional): Directory path to search (uses default if empty), query (optional): Search query for fuzzy matching",
+			Usage: "Use this tool to find PDF files in the default directory or any specified " +
+				"directory. Supports fuzzy search by filename.",
+			Parameters: "directory (optional): Directory path to search (uses default if empty), " +
+				"query (optional): Search query for fuzzy matching",
 		},
 		{
 			Name:        "pdf_stats_directory",
 			Description: "Get statistics about PDF files in a directory",
-			Usage:       "Use this tool to get an overview of all PDF files in a directory including total count, sizes, and file information.",
-			Parameters:  "directory (optional): Directory path to analyze (uses default if empty)",
+			Usage: "Use this tool to get an overview of all PDF files in a directory including " +
+				"total count, sizes, and file information.",
+			Parameters: "directory (optional): Directory path to analyze (uses default if empty)",
 		},
 	}
 

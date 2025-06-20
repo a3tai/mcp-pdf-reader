@@ -45,6 +45,13 @@ func NewServer(cfg *config.Config, pdfService *pdf.Service) (*Server, error) {
 
 // registerTools registers all available MCP tools
 func (s *Server) registerTools() {
+	s.registerBasicTools()
+	s.registerExtractionTools()
+	s.registerUtilityTools()
+}
+
+// registerBasicTools registers basic PDF manipulation tools
+func (s *Server) registerBasicTools() {
 	// Register PDF read file tool
 	pdfReadFileTool := mcp.NewTool(
 		"pdf_read_file",
@@ -88,7 +95,87 @@ func (s *Server) registerTools() {
 		),
 	)
 	s.mcpServer.AddTool(pdfStatsFileTool, s.handlePDFStatsFile)
+}
 
+// registerExtractionTools registers structured extraction tools
+func (s *Server) registerExtractionTools() {
+	// Register PDF extract structured tool
+	pdfExtractStructuredTool := mcp.NewTool(
+		"pdf_extract_structured",
+		mcp.WithDescription("Extract structured content with positioning and formatting information"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+		mcp.WithString("mode",
+			mcp.Description("Extraction mode: raw, structured, semantic, table, complete (default: structured)"),
+		),
+		mcp.WithString("config",
+			mcp.Description("JSON string with extraction configuration options"),
+		),
+	)
+	s.mcpServer.AddTool(pdfExtractStructuredTool, s.handlePDFExtractStructured)
+
+	// Register PDF extract tables tool
+	pdfExtractTablesTool := mcp.NewTool(
+		"pdf_extract_tables",
+		mcp.WithDescription("Extract tabular data from PDF with structure preservation"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+		mcp.WithString("config",
+			mcp.Description("JSON string with extraction configuration options"),
+		),
+	)
+	s.mcpServer.AddTool(pdfExtractTablesTool, s.handlePDFExtractTables)
+
+	// Register PDF extract semantic tool
+	pdfExtractSemanticTool := mcp.NewTool(
+		"pdf_extract_semantic",
+		mcp.WithDescription("Extract content with semantic grouping and relationship detection"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+		mcp.WithString("config",
+			mcp.Description("JSON string with extraction configuration options"),
+		),
+	)
+	s.mcpServer.AddTool(pdfExtractSemanticTool, s.handlePDFExtractSemantic)
+
+	// Register PDF extract complete tool
+	pdfExtractCompleteTool := mcp.NewTool(
+		"pdf_extract_complete",
+		mcp.WithDescription("Comprehensive extraction of all content types (text, images, tables, forms, annotations)"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+		mcp.WithString("config",
+			mcp.Description("JSON string with extraction configuration options"),
+		),
+	)
+	s.mcpServer.AddTool(pdfExtractCompleteTool, s.handlePDFExtractComplete)
+
+	// Register PDF query content tool
+	pdfQueryContentTool := mcp.NewTool(
+		"pdf_query_content",
+		mcp.WithDescription("Query and filter extracted PDF content using search criteria"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+		mcp.WithString("query",
+			mcp.Required(),
+			mcp.Description("JSON string with query criteria for filtering content"),
+		),
+	)
+	s.mcpServer.AddTool(pdfQueryContentTool, s.handlePDFQueryContent)
+}
+
+// registerUtilityTools registers utility and information tools
+func (s *Server) registerUtilityTools() {
 	// Register PDF search directory tool
 	pdfSearchDirectoryTool := mcp.NewTool(
 		"pdf_search_directory",
@@ -118,6 +205,28 @@ func (s *Server) registerTools() {
 		mcp.WithDescription("Get server information, available tools, directory contents, and usage guidance"),
 	)
 	s.mcpServer.AddTool(pdfServerInfoTool, s.handlePDFServerInfo)
+
+	// Register PDF get page info tool
+	pdfGetPageInfoTool := mcp.NewTool(
+		"pdf_get_page_info",
+		mcp.WithDescription("Get detailed information about PDF pages (dimensions, layout, etc.)"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+	)
+	s.mcpServer.AddTool(pdfGetPageInfoTool, s.handlePDFGetPageInfo)
+
+	// Register PDF get metadata tool
+	pdfGetMetadataTool := mcp.NewTool(
+		"pdf_get_metadata",
+		mcp.WithDescription("Extract comprehensive document metadata and properties"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+	)
+	s.mcpServer.AddTool(pdfGetMetadataTool, s.handlePDFGetMetadata)
 }
 
 // Handler functions
@@ -283,6 +392,201 @@ func (s *Server) handlePDFServerInfo(ctx context.Context, request mcp.CallToolRe
 	return mcp.NewToolResultText(responseText), nil
 }
 
+// New structured extraction handlers
+
+func (s *Server) handlePDFExtractStructured(
+	ctx context.Context, request mcp.CallToolRequest,
+) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	args := request.GetArguments()
+
+	req := pdf.PDFExtractStructuredRequest{
+		Path: path,
+	}
+
+	// Handle optional mode parameter
+	if mode, ok := args["mode"].(string); ok {
+		req.Mode = mode
+	}
+
+	// Handle optional config parameter (simplified for now)
+	if configStr, ok := args["config"].(string); ok && configStr != "" {
+		// For now, just use default config
+		// TODO: Parse JSON config string when needed
+		req.Config = pdf.ExtractionConfig{
+			ExtractText:        true,
+			IncludeCoordinates: true,
+			IncludeFormatting:  true,
+		}
+	}
+
+	result, err := s.pdfService.ExtractStructured(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	responseText := s.formatPDFExtractResult(result)
+	return mcp.NewToolResultText(responseText), nil
+}
+
+func (s *Server) handlePDFExtractTables(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return s.handleExtractionRequest(request,
+		func(path string, config pdf.ExtractionConfig) (*pdf.PDFExtractResult, error) {
+			return s.pdfService.ExtractTables(pdf.PDFExtractTablesRequest{Path: path, Config: config})
+		}, pdf.ExtractionConfig{
+			ExtractText:        true,
+			ExtractTables:      true,
+			IncludeCoordinates: true,
+		})
+}
+
+func (s *Server) handlePDFExtractSemantic(
+	ctx context.Context, request mcp.CallToolRequest,
+) (*mcp.CallToolResult, error) {
+	return s.handleExtractionRequest(request,
+		func(path string, config pdf.ExtractionConfig) (*pdf.PDFExtractResult, error) {
+			return s.pdfService.ExtractSemantic(pdf.PDFExtractSemanticRequest{Path: path, Config: config})
+		}, pdf.ExtractionConfig{
+			ExtractText:        true,
+			IncludeCoordinates: true,
+			IncludeFormatting:  true,
+		})
+}
+
+// handleExtractionRequest is a common handler for extraction requests
+func (s *Server) handleExtractionRequest(
+	request mcp.CallToolRequest,
+	handler func(string, pdf.ExtractionConfig) (*pdf.PDFExtractResult, error),
+	defaultConfig pdf.ExtractionConfig,
+) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	args := request.GetArguments()
+	config := defaultConfig
+
+	// Handle optional config parameter (simplified for now)
+	if configStr, ok := args["config"].(string); ok && configStr != "" {
+		// For now, just use default config
+		// TODO: Parse JSON config string when needed
+		config = defaultConfig
+	}
+
+	result, err := handler(path, config)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	responseText := s.formatPDFExtractResult(result)
+	return mcp.NewToolResultText(responseText), nil
+}
+
+func (s *Server) handlePDFExtractComplete(
+	ctx context.Context, request mcp.CallToolRequest,
+) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	args := request.GetArguments()
+
+	req := pdf.PDFExtractCompleteRequest{
+		Path: path,
+	}
+
+	// Handle optional config parameter (simplified for now)
+	if configStr, ok := args["config"].(string); ok && configStr != "" {
+		// For now, just use default config for complete extraction
+		req.Config = pdf.ExtractionConfig{
+			ExtractText:        true,
+			ExtractImages:      true,
+			ExtractTables:      true,
+			ExtractForms:       true,
+			ExtractAnnotations: true,
+			IncludeCoordinates: true,
+			IncludeFormatting:  true,
+		}
+	}
+
+	result, err := s.pdfService.ExtractComplete(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	responseText := s.formatPDFExtractResult(result)
+	return mcp.NewToolResultText(responseText), nil
+}
+
+func (s *Server) handlePDFQueryContent(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	queryStr, err := request.RequireString("query")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// For now, create a simple query based on the query string
+	// TODO: Parse JSON query string when needed
+	query := pdf.ContentQuery{
+		TextQuery: queryStr,
+	}
+
+	req := pdf.PDFQueryContentRequest{
+		Path:  path,
+		Query: query,
+	}
+
+	result, err := s.pdfService.QueryContent(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	responseText := s.formatPDFQueryResult(result)
+	return mcp.NewToolResultText(responseText), nil
+}
+
+func (s *Server) handlePDFGetPageInfo(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	req := pdf.PDFGetPageInfoRequest{Path: path}
+	result, err := s.pdfService.GetPageInfo(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	responseText := s.formatPDFPageInfoResult(result)
+	return mcp.NewToolResultText(responseText), nil
+}
+
+func (s *Server) handlePDFGetMetadata(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	req := pdf.PDFGetMetadataRequest{Path: path}
+	result, err := s.pdfService.GetMetadata(req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	responseText := s.formatPDFMetadataResult(result)
+	return mcp.NewToolResultText(responseText), nil
+}
+
 // Formatting methods
 func (s *Server) formatPDFSearchDirectoryResult(result *pdf.PDFSearchDirectoryResult) string {
 	text := fmt.Sprintf("Found %d PDF file(s) in directory: %s\n", result.TotalCount, result.Directory)
@@ -409,6 +713,231 @@ func (s *Server) formatPDFServerInfoResult(result *pdf.PDFServerInfoResult) stri
 	text += "\n" + result.UsageGuidance
 
 	return text
+}
+
+// New formatting methods for structured extraction results
+
+func (s *Server) formatPDFExtractResult(result *pdf.PDFExtractResult) string {
+	text := fmt.Sprintf("📄 PDF Extraction Results: %s\n", result.FilePath)
+	text += fmt.Sprintf("🔧 Mode: %s\n", result.Mode)
+	text += fmt.Sprintf("📖 Pages: %d (processed: %v)\n", result.TotalPages, result.ProcessedPages)
+	text += fmt.Sprintf("🎯 Quality: %s\n", result.Summary.Quality)
+	text += fmt.Sprintf("📊 Total Elements: %d\n\n", result.Summary.TotalElements)
+
+	// Content type breakdown
+	text += "📋 Content Types Found:\n"
+	for contentType, count := range result.Summary.ContentTypes {
+		text += fmt.Sprintf("  • %s: %d\n", contentType, count)
+	}
+	text += "\n"
+
+	// Tables if found
+	if len(result.Tables) > 0 {
+		text += fmt.Sprintf("📊 Tables Found: %d\n", len(result.Tables))
+		for i, table := range result.Tables {
+			text += fmt.Sprintf("  Table %d: %d rows × %d columns (%d cells)\n",
+				i+1, len(table.Rows), len(table.Columns), table.CellCount)
+			if table.HasHeaders {
+				text += "    - Has headers\n"
+			}
+			text += fmt.Sprintf("    - Confidence: %.2f\n", table.Confidence)
+		}
+		text += "\n"
+	}
+
+	// Page breakdown
+	if len(result.Summary.PageBreakdown) > 0 {
+		text += "📄 Page Breakdown:\n"
+		for _, page := range result.Summary.PageBreakdown {
+			text += fmt.Sprintf("  Page %d: %d elements\n", page.Page, page.Elements)
+		}
+		text += "\n"
+	}
+
+	// Suggestions
+	if len(result.Summary.Suggestions) > 0 {
+		text += "💡 Suggestions:\n"
+		for _, suggestion := range result.Summary.Suggestions {
+			text += fmt.Sprintf("  • %s\n", suggestion)
+		}
+		text += "\n"
+	}
+
+	// Warnings and errors
+	if len(result.Warnings) > 0 {
+		text += "⚠️  Warnings:\n"
+		for _, warning := range result.Warnings {
+			text += fmt.Sprintf("  • %s\n", warning)
+		}
+		text += "\n"
+	}
+
+	if len(result.Errors) > 0 {
+		text += "❌ Errors:\n"
+		for _, error := range result.Errors {
+			text += fmt.Sprintf("  • %s\n", error)
+		}
+		text += "\n"
+	}
+
+	// Show first few elements as examples
+	if len(result.Elements) > 0 {
+		text += fmt.Sprintf("🔍 Content Elements (showing first %d):\n", minInt(5, len(result.Elements)))
+		for i, element := range result.Elements {
+			if i >= 5 {
+				text += fmt.Sprintf("  ... and %d more elements\n", len(result.Elements)-5)
+				break
+			}
+			text += fmt.Sprintf("  %d. %s on page %d (confidence: %.2f)\n",
+				i+1, element.Type, element.PageNumber, element.Confidence)
+
+			// Show content preview for text elements
+			if element.Type == "text" {
+				if contentStr, ok := element.Content.(string); ok {
+					preview := contentStr
+					if len(preview) > 100 {
+						preview = preview[:100] + "..."
+					}
+					text += fmt.Sprintf("     Content: %s\n", preview)
+				}
+			}
+		}
+	}
+
+	return text
+}
+
+func (s *Server) formatPDFQueryResult(result *pdf.PDFQueryResult) string {
+	text := fmt.Sprintf("🔍 Query Results: %s\n", result.FilePath)
+	text += fmt.Sprintf("📊 Matches Found: %d\n", result.MatchCount)
+	text += fmt.Sprintf("🎯 Average Confidence: %.2f\n\n", result.Summary.Confidence)
+
+	// Query details
+	text += "🔎 Query Details:\n"
+	if len(result.Query.ContentTypes) > 0 {
+		text += fmt.Sprintf("  Content Types: %v\n", result.Query.ContentTypes)
+	}
+	if len(result.Query.Pages) > 0 {
+		text += fmt.Sprintf("  Pages: %v\n", result.Query.Pages)
+	}
+	if result.Query.TextQuery != "" {
+		text += fmt.Sprintf("  Text Query: %s\n", result.Query.TextQuery)
+	}
+	if result.Query.MinConfidence > 0 {
+		text += fmt.Sprintf("  Min Confidence: %.2f\n", result.Query.MinConfidence)
+	}
+	text += "\n"
+
+	// Result breakdown
+	if len(result.Summary.TypeBreakdown) > 0 {
+		text += "📋 Result Breakdown by Type:\n"
+		for contentType, count := range result.Summary.TypeBreakdown {
+			text += fmt.Sprintf("  • %s: %d\n", contentType, count)
+		}
+		text += "\n"
+	}
+
+	if len(result.Summary.PageBreakdown) > 0 {
+		text += "📄 Result Breakdown by Page:\n"
+		for page, count := range result.Summary.PageBreakdown {
+			text += fmt.Sprintf("  • Page %d: %d\n", page, count)
+		}
+		text += "\n"
+	}
+
+	// Show matching elements
+	if len(result.Elements) > 0 {
+		text += fmt.Sprintf("🎯 Matching Elements (showing first %d):\n", minInt(10, len(result.Elements)))
+		for i, element := range result.Elements {
+			if i >= 10 {
+				text += fmt.Sprintf("  ... and %d more matches\n", len(result.Elements)-10)
+				break
+			}
+			text += fmt.Sprintf("  %d. %s on page %d (confidence: %.2f)\n",
+				i+1, element.Type, element.PageNumber, element.Confidence)
+		}
+	}
+
+	return text
+}
+
+func (s *Server) formatPDFPageInfoResult(result *pdf.PDFPageInfoResult) string {
+	text := fmt.Sprintf("📄 Page Information: %s\n", result.FilePath)
+	text += fmt.Sprintf("📖 Total Pages: %d\n\n", len(result.Pages))
+
+	for _, page := range result.Pages {
+		text += fmt.Sprintf("Page %d:\n", page.Number)
+		text += fmt.Sprintf("  Dimensions: %.1f × %.1f pts\n", page.Width, page.Height)
+		if page.Rotation != 0 {
+			text += fmt.Sprintf("  Rotation: %d°\n", page.Rotation)
+		}
+		text += fmt.Sprintf("  Media Box: (%.1f, %.1f) to (%.1f, %.1f)\n",
+			page.MediaBox.X, page.MediaBox.Y,
+			page.MediaBox.X+page.MediaBox.Width, page.MediaBox.Y+page.MediaBox.Height)
+		text += "\n"
+	}
+
+	return text
+}
+
+func (s *Server) formatPDFMetadataResult(result *pdf.PDFMetadataResult) string {
+	text := fmt.Sprintf("📋 Document Metadata: %s\n\n", result.FilePath)
+
+	metadata := result.Metadata
+
+	if metadata.Title != "" {
+		text += fmt.Sprintf("📖 Title: %s\n", metadata.Title)
+	}
+	if metadata.Author != "" {
+		text += fmt.Sprintf("👤 Author: %s\n", metadata.Author)
+	}
+	if metadata.Subject != "" {
+		text += fmt.Sprintf("📝 Subject: %s\n", metadata.Subject)
+	}
+	if metadata.Creator != "" {
+		text += fmt.Sprintf("🛠️ Creator: %s\n", metadata.Creator)
+	}
+	if metadata.Producer != "" {
+		text += fmt.Sprintf("🏭 Producer: %s\n", metadata.Producer)
+	}
+	if metadata.CreationDate != "" {
+		text += fmt.Sprintf("📅 Created: %s\n", metadata.CreationDate)
+	}
+	if metadata.ModificationDate != "" {
+		text += fmt.Sprintf("📅 Modified: %s\n", metadata.ModificationDate)
+	}
+	if len(metadata.Keywords) > 0 {
+		text += fmt.Sprintf("🏷️ Keywords: %v\n", metadata.Keywords)
+	}
+	if metadata.Version != "" {
+		text += fmt.Sprintf("📄 PDF Version: %s\n", metadata.Version)
+	}
+	if metadata.PageLayout != "" {
+		text += fmt.Sprintf("📐 Page Layout: %s\n", metadata.PageLayout)
+	}
+	if metadata.PageMode != "" {
+		text += fmt.Sprintf("🖥️ Page Mode: %s\n", metadata.PageMode)
+	}
+	if metadata.Encrypted {
+		text += "🔒 Document is encrypted\n"
+	}
+
+	if len(metadata.CustomProperties) > 0 {
+		text += "\n🏷️ Custom Properties:\n"
+		for key, value := range metadata.CustomProperties {
+			text += fmt.Sprintf("  • %s: %s\n", key, value)
+		}
+	}
+
+	return text
+}
+
+// Helper function for minimum of two integers
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // Run starts the MCP server in the configured mode

@@ -134,3 +134,216 @@ type ToolInfo struct {
 	Usage       string `json:"usage"`
 	Parameters  string `json:"parameters"`
 }
+
+// New Extraction Tool Request Types
+
+// PDFExtractStructuredRequest represents a request for structured content extraction
+type PDFExtractStructuredRequest struct {
+	Path   string           `json:"path"`
+	Mode   string           `json:"mode,omitempty"`
+	Config ExtractionConfig `json:"config,omitempty"`
+	Query  *ContentQuery    `json:"query,omitempty"`
+}
+
+// PDFExtractTablesRequest represents a request for table extraction
+type PDFExtractTablesRequest struct {
+	Path   string           `json:"path"`
+	Config ExtractionConfig `json:"config,omitempty"`
+}
+
+// PDFExtractSemanticRequest represents a request for semantic content extraction
+type PDFExtractSemanticRequest struct {
+	Path   string           `json:"path"`
+	Config ExtractionConfig `json:"config,omitempty"`
+}
+
+// PDFExtractCompleteRequest represents a request for complete content extraction
+type PDFExtractCompleteRequest struct {
+	Path   string           `json:"path"`
+	Config ExtractionConfig `json:"config,omitempty"`
+}
+
+// PDFQueryContentRequest represents a request to query extracted content
+type PDFQueryContentRequest struct {
+	Path  string       `json:"path"`
+	Query ContentQuery `json:"query"`
+}
+
+// PDFGetPageInfoRequest represents a request for page information
+type PDFGetPageInfoRequest struct {
+	Path string `json:"path"`
+}
+
+// PDFGetMetadataRequest represents a request for document metadata
+type PDFGetMetadataRequest struct {
+	Path string `json:"path"`
+}
+
+// Configuration Types
+
+// ExtractionConfig provides configuration for extraction operations
+type ExtractionConfig struct {
+	ExtractText        bool    `json:"extract_text,omitempty"`
+	ExtractImages      bool    `json:"extract_images,omitempty"`
+	ExtractTables      bool    `json:"extract_tables,omitempty"`
+	ExtractForms       bool    `json:"extract_forms,omitempty"`
+	ExtractAnnotations bool    `json:"extract_annotations,omitempty"`
+	IncludeCoordinates bool    `json:"include_coordinates,omitempty"`
+	IncludeFormatting  bool    `json:"include_formatting,omitempty"`
+	Pages              []int   `json:"pages,omitempty"`
+	MinConfidence      float64 `json:"min_confidence,omitempty"`
+}
+
+// ContentQuery represents a query for filtering content
+type ContentQuery struct {
+	ContentTypes  []string   `json:"content_types,omitempty"`
+	Pages         []int      `json:"pages,omitempty"`
+	BoundingBox   *Rectangle `json:"bounding_box,omitempty"`
+	TextQuery     string     `json:"text_query,omitempty"`
+	MinConfidence float64    `json:"min_confidence,omitempty"`
+}
+
+// Rectangle represents a rectangular area
+type Rectangle struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+// Response Types
+
+// PDFExtractResult represents the result of content extraction
+type PDFExtractResult struct {
+	FilePath       string            `json:"file_path"`
+	Mode           string            `json:"mode"`
+	TotalPages     int               `json:"total_pages"`
+	ProcessedPages []int             `json:"processed_pages"`
+	Elements       []ContentElement  `json:"elements"`
+	Tables         []TableElement    `json:"tables,omitempty"`
+	Summary        ExtractionSummary `json:"summary"`
+	Metadata       DocumentMetadata  `json:"metadata"`
+	Warnings       []string          `json:"warnings,omitempty"`
+	Errors         []string          `json:"errors,omitempty"`
+}
+
+// ContentElement represents a piece of extracted content
+type ContentElement struct {
+	ID          string                 `json:"id"`
+	Type        string                 `json:"type"`
+	PageNumber  int                    `json:"page_number"`
+	BoundingBox Rectangle              `json:"bounding_box"`
+	Content     interface{}            `json:"content"`
+	Properties  map[string]interface{} `json:"properties,omitempty"`
+	Children    []ContentElement       `json:"children,omitempty"`
+	Parent      *string                `json:"parent,omitempty"`
+	ZOrder      int                    `json:"z_order,omitempty"`
+	Confidence  float64                `json:"confidence,omitempty"`
+}
+
+// TableElement represents extracted table data
+type TableElement struct {
+	Rows       []TableRow `json:"rows"`
+	Columns    []TableCol `json:"columns"`
+	CellCount  int        `json:"cell_count"`
+	HasHeaders bool       `json:"has_headers,omitempty"`
+	Confidence float64    `json:"confidence,omitempty"`
+}
+
+// TableRow represents a table row
+type TableRow struct {
+	Index       int         `json:"index"`
+	Cells       []TableCell `json:"cells"`
+	BoundingBox Rectangle   `json:"bounding_box"`
+	IsHeader    bool        `json:"is_header,omitempty"`
+}
+
+// TableCol represents a table column
+type TableCol struct {
+	Index       int       `json:"index"`
+	Header      string    `json:"header,omitempty"`
+	BoundingBox Rectangle `json:"bounding_box"`
+	DataType    string    `json:"data_type,omitempty"`
+}
+
+// TableCell represents a table cell
+type TableCell struct {
+	RowIndex    int       `json:"row_index"`
+	ColIndex    int       `json:"col_index"`
+	Content     string    `json:"content"`
+	BoundingBox Rectangle `json:"bounding_box"`
+	DataType    string    `json:"data_type,omitempty"`
+	Confidence  float64   `json:"confidence,omitempty"`
+}
+
+// ExtractionSummary provides a summary of extraction results
+type ExtractionSummary struct {
+	ContentTypes  map[string]int `json:"content_types"`
+	TotalElements int            `json:"total_elements"`
+	PageBreakdown []PageSummary  `json:"page_breakdown,omitempty"`
+	HasStructure  bool           `json:"has_structure"`
+	Quality       string         `json:"quality"`
+	Suggestions   []string       `json:"suggestions,omitempty"`
+}
+
+// PageSummary provides summary for a single page
+type PageSummary struct {
+	Page     int            `json:"page"`
+	Elements int            `json:"elements"`
+	Types    map[string]int `json:"types"`
+}
+
+// DocumentMetadata represents document metadata
+type DocumentMetadata struct {
+	Title            string            `json:"title,omitempty"`
+	Author           string            `json:"author,omitempty"`
+	Subject          string            `json:"subject,omitempty"`
+	Creator          string            `json:"creator,omitempty"`
+	Producer         string            `json:"producer,omitempty"`
+	CreationDate     string            `json:"creation_date,omitempty"`
+	ModificationDate string            `json:"modification_date,omitempty"`
+	Keywords         []string          `json:"keywords,omitempty"`
+	PageLayout       string            `json:"page_layout,omitempty"`
+	PageMode         string            `json:"page_mode,omitempty"`
+	Version          string            `json:"version,omitempty"`
+	Encrypted        bool              `json:"encrypted"`
+	CustomProperties map[string]string `json:"custom_properties,omitempty"`
+}
+
+// PDFQueryResult represents query results
+type PDFQueryResult struct {
+	FilePath   string           `json:"file_path"`
+	Query      ContentQuery     `json:"query"`
+	MatchCount int              `json:"match_count"`
+	Elements   []ContentElement `json:"elements"`
+	Summary    QuerySummary     `json:"summary"`
+}
+
+// QuerySummary provides query result summary
+type QuerySummary struct {
+	TypeBreakdown map[string]int `json:"type_breakdown"`
+	PageBreakdown map[int]int    `json:"page_breakdown"`
+	Confidence    float64        `json:"avg_confidence"`
+}
+
+// PageInfo represents information about a PDF page
+type PageInfo struct {
+	Number   int       `json:"number"`
+	Width    float64   `json:"width"`
+	Height   float64   `json:"height"`
+	Rotation int       `json:"rotation"`
+	MediaBox Rectangle `json:"media_box"`
+	CropBox  Rectangle `json:"crop_box,omitempty"`
+}
+
+// PDFPageInfoResult represents page information results
+type PDFPageInfoResult struct {
+	FilePath string     `json:"file_path"`
+	Pages    []PageInfo `json:"pages"`
+}
+
+// PDFMetadataResult represents metadata extraction results
+type PDFMetadataResult struct {
+	FilePath string           `json:"file_path"`
+	Metadata DocumentMetadata `json:"metadata"`
+}

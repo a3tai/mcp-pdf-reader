@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -68,7 +69,9 @@ func LoadFromFlags() (*Config, error) {
 
 	setupViperEnvironment(cfg)
 	defineCommandLineFlags(cfg)
-	bindFlagsToViper()
+	if err := bindFlagsToViper(); err != nil {
+		return nil, fmt.Errorf("failed to bind flags: %w", err)
+	}
 	setupUsageMessage()
 
 	// Check for version flag before parsing
@@ -100,14 +103,16 @@ func setupViperEnvironment(cfg *Config) {
 	// Set environment variable prefix
 	viper.SetEnvPrefix("MCP_PDF")
 	viper.AutomaticEnv()
+	// Replace dashes with underscores for environment variables
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 
 	// Define flags with Viper
 	viper.SetDefault("mode", cfg.Mode)
 	viper.SetDefault("host", cfg.Host)
 	viper.SetDefault("port", cfg.Port)
 	viper.SetDefault("dir", cfg.PDFDirectory)
-	viper.SetDefault("loglevel", cfg.LogLevel)
-	viper.SetDefault("maxfilesize", cfg.MaxFileSize)
+	viper.SetDefault("log-level", cfg.LogLevel)
+	viper.SetDefault("max-file-size", cfg.MaxFileSize)
 }
 
 // defineCommandLineFlags sets up all command line flags
@@ -116,18 +121,31 @@ func defineCommandLineFlags(cfg *Config) {
 	pflag.String("host", cfg.Host, "Server host address (server mode only)")
 	pflag.Int("port", cfg.Port, "Server port (server mode only)")
 	pflag.String("dir", cfg.PDFDirectory, "Directory containing PDF files")
-	pflag.String("loglevel", cfg.LogLevel, "Log level (debug, info, warn, error)")
-	pflag.Int64("maxfilesize", cfg.MaxFileSize, "Maximum PDF file size in bytes")
+	pflag.String("log-level", cfg.LogLevel, "Log level (debug, info, warn, error)")
+	pflag.Int64("max-file-size", cfg.MaxFileSize, "Maximum PDF file size in bytes")
 }
 
 // bindFlagsToViper binds command line flags to viper configuration
-func bindFlagsToViper() {
-	_ = viper.BindPFlag("mode", pflag.Lookup("mode"))
-	_ = viper.BindPFlag("host", pflag.Lookup("host"))
-	_ = viper.BindPFlag("port", pflag.Lookup("port"))
-	_ = viper.BindPFlag("dir", pflag.Lookup("dir"))
-	_ = viper.BindPFlag("loglevel", pflag.Lookup("loglevel"))
-	_ = viper.BindPFlag("maxfilesize", pflag.Lookup("maxfilesize"))
+func bindFlagsToViper() error {
+	if err := viper.BindPFlag("mode", pflag.Lookup("mode")); err != nil {
+		return fmt.Errorf("failed to bind mode flag: %w", err)
+	}
+	if err := viper.BindPFlag("host", pflag.Lookup("host")); err != nil {
+		return fmt.Errorf("failed to bind host flag: %w", err)
+	}
+	if err := viper.BindPFlag("port", pflag.Lookup("port")); err != nil {
+		return fmt.Errorf("failed to bind port flag: %w", err)
+	}
+	if err := viper.BindPFlag("dir", pflag.Lookup("dir")); err != nil {
+		return fmt.Errorf("failed to bind dir flag: %w", err)
+	}
+	if err := viper.BindPFlag("log-level", pflag.Lookup("log-level")); err != nil {
+		return fmt.Errorf("failed to bind log-level flag: %w", err)
+	}
+	if err := viper.BindPFlag("max-file-size", pflag.Lookup("max-file-size")); err != nil {
+		return fmt.Errorf("failed to bind max-file-size flag: %w", err)
+	}
+	return nil
 }
 
 // setupUsageMessage configures the custom usage message
@@ -149,8 +167,8 @@ func setupUsageMessage() {
 		fmt.Fprintf(os.Stderr, "  MCP_PDF_HOST        Server host\n")
 		fmt.Fprintf(os.Stderr, "  MCP_PDF_PORT        Server port\n")
 		fmt.Fprintf(os.Stderr, "  MCP_PDF_DIR         PDF directory\n")
-		fmt.Fprintf(os.Stderr, "  MCP_PDF_LOGLEVEL    Log level\n")
-		fmt.Fprintf(os.Stderr, "  MCP_PDF_MAXFILESIZE Maximum file size\n")
+		fmt.Fprintf(os.Stderr, "  MCP_PDF_LOG_LEVEL    Log level\n")
+		fmt.Fprintf(os.Stderr, "  MCP_PDF_MAX_FILE_SIZE Maximum file size\n")
 	}
 }
 
@@ -170,8 +188,8 @@ func populateConfigFromViper(cfg *Config) {
 	cfg.Host = viper.GetString("host")
 	cfg.Port = viper.GetInt("port")
 	cfg.PDFDirectory = viper.GetString("dir")
-	cfg.LogLevel = viper.GetString("loglevel")
-	cfg.MaxFileSize = viper.GetInt64("maxfilesize")
+	cfg.LogLevel = viper.GetString("log-level")
+	cfg.MaxFileSize = viper.GetInt64("max-file-size")
 }
 
 // Validate checks if the configuration is valid

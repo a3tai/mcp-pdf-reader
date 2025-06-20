@@ -97,7 +97,7 @@ mcp-pdf-reader
 mcp-pdf-reader --dir=/path/to/documents
 
 # Debug mode
-mcp-pdf-reader --dir=/path/to/documents --loglevel=debug
+mcp-pdf-reader --dir=/path/to/documents --log-level=debug
 ```
 
 ### HTTP Server Mode
@@ -123,8 +123,8 @@ curl http://localhost:8080/health
 | `--dir` | current directory | Directory containing PDF files |
 | `--host` | `127.0.0.1` | Server host (server mode only) |
 | `--port` | `8080` | Server port (server mode only) |
-| `--loglevel` | `info` | Log level: `debug`, `info`, `warn`, `error` |
-| `--maxfilesize` | `104857600` | Maximum PDF file size in bytes (100MB) |
+| `--log-level` | `info` | Log level: `debug`, `info`, `warn`, `error` |
+| `--max-file-size` | `104857600` | Maximum PDF file size in bytes (100MB) |
 
 ## ⚡ Quick Reference
 
@@ -144,10 +144,10 @@ mcp-pdf-reader --mode=server --dir=./docs
 mcp-pdf-reader --mode=server --host=0.0.0.0 --port=9090
 
 # Debug mode
-mcp-pdf-reader --mode=server --loglevel=debug --dir=./docs
+mcp-pdf-reader --mode=server --log-level=debug --dir=./docs
 
 # Larger file size limit (200MB)
-mcp-pdf-reader --maxfilesize=209715200 --dir=./docs
+mcp-pdf-reader --max-file-size=209715200 --dir=./docs
 
 # Environment variables (alternative to flags)
 MCP_PDF_DIR=/path/to/pdfs mcp-pdf-reader

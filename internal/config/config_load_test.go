@@ -25,8 +25,8 @@ func clearEnvVars() {
 	os.Unsetenv("MCP_PDF_HOST")
 	os.Unsetenv("MCP_PDF_PORT")
 	os.Unsetenv("MCP_PDF_DIR")
-	os.Unsetenv("MCP_PDF_LOGLEVEL")
-	os.Unsetenv("MCP_PDF_MAXFILESIZE")
+	os.Unsetenv("MCP_PDF_LOG_LEVEL")
+	os.Unsetenv("MCP_PDF_MAX_FILE_SIZE")
 }
 
 func TestLoadFromFlags_DefaultConfig(t *testing.T) {
@@ -109,7 +109,7 @@ func TestLoadFromFlags_ValidFlags(t *testing.T) {
 		},
 		{
 			name:            "debug logging",
-			argsTemplate:    []string{"mcp-pdf-reader", "--loglevel=debug", "--dir=%s"},
+			argsTemplate:    []string{"mcp-pdf-reader", "--log-level=debug", "--dir=%s"},
 			wantMode:        "stdio",
 			wantHost:        "127.0.0.1",
 			wantPort:        8080,
@@ -118,7 +118,7 @@ func TestLoadFromFlags_ValidFlags(t *testing.T) {
 		},
 		{
 			name:            "custom max file size",
-			argsTemplate:    []string{"mcp-pdf-reader", "--maxfilesize=50000000", "--dir=%s"},
+			argsTemplate:    []string{"mcp-pdf-reader", "--max-file-size=50000000", "--dir=%s"},
 			wantMode:        "stdio",
 			wantHost:        "127.0.0.1",
 			wantPort:        8080,
@@ -199,8 +199,8 @@ func TestLoadFromFlags_EnvironmentVariables(t *testing.T) {
 	os.Setenv("MCP_PDF_HOST", "192.168.1.1")
 	os.Setenv("MCP_PDF_PORT", "3000")
 	os.Setenv("MCP_PDF_DIR", tempDir)
-	os.Setenv("MCP_PDF_LOGLEVEL", "warn")
-	os.Setenv("MCP_PDF_MAXFILESIZE", "200000000")
+	os.Setenv("MCP_PDF_LOG_LEVEL", "warn")
+	os.Setenv("MCP_PDF_MAX_FILE_SIZE", "200000000")
 
 	setArgs([]string{"mcp-pdf-reader"})
 	resetFlags()
@@ -318,7 +318,7 @@ func TestLoadFromFlags_InvalidLogLevel(t *testing.T) {
 	}()
 
 	tempDir := t.TempDir()
-	setArgs([]string{"mcp-pdf-reader", "--loglevel=invalid", "--dir=" + tempDir})
+	setArgs([]string{"mcp-pdf-reader", "--log-level=invalid", "--dir=" + tempDir})
 	resetFlags()
 	clearEnvVars()
 

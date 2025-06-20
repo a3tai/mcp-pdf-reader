@@ -317,11 +317,214 @@
         ],
         "priority": "low",
         "subtasks": []
+      },
+      {
+        "id": 16,
+        "title": "Implement Code Signing for Release Binaries",
+        "description": "Set up automated code signing infrastructure for all platform binaries (macOS, Windows, Linux) with certificate management and GitHub Actions integration to ensure release artifacts are properly signed and trusted.",
+        "details": "Implement comprehensive code signing solution for multi-platform releases:\n\n```yaml\n# .github/workflows/release.yml\nname: Release with Code Signing\non:\n  push:\n    tags:\n      - 'v*'\n\njobs:\n  sign-macos:\n    runs-on: macos-latest\n    steps:\n      - name: Import Apple Developer Certificate\n        env:\n          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}\n          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}\n        run: |\n          echo \"$APPLE_CERT_BASE64\" | base64 --decode > certificate.p12\n          security create-keychain -p actions temp.keychain\n          security import certificate.p12 -k temp.keychain -P \"$APPLE_CERT_PASSWORD\" -T /usr/bin/codesign\n          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions temp.keychain\n      \n      - name: Sign macOS Binary\n        run: |\n          codesign --deep --force --verify --verbose \\\n            --sign \"${{ secrets.APPLE_DEVELOPER_ID }}\" \\\n            --options runtime \\\n            --entitlements entitlements.plist \\\n            ./dist/pdfextract-darwin-amd64\n          \n      - name: Notarize macOS Binary\n        run: |\n          xcrun altool --notarize-app \\\n            --primary-bundle-id \"com.pdfextract.cli\" \\\n            --username \"${{ secrets.APPLE_ID }}\" \\\n            --password \"${{ secrets.APPLE_APP_PASSWORD }}\" \\\n            --file ./dist/pdfextract-darwin-amd64.zip\n\n  sign-windows:\n    runs-on: windows-latest\n    steps:\n      - name: Setup Windows Code Signing\n        env:\n          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}\n          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}\n        run: |\n          $cert = [System.Convert]::FromBase64String($env:WINDOWS_CERT_BASE64)\n          [System.IO.File]::WriteAllBytes(\"certificate.pfx\", $cert)\n          \n      - name: Sign Windows Binary\n        run: |\n          & \"C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.19041.0\\x64\\signtool.exe\" sign `\n            /f certificate.pfx `\n            /p $env:WINDOWS_CERT_PASSWORD `\n            /t http://timestamp.digicert.com `\n            /fd SHA256 `\n            /v .\\dist\\pdfextract-windows-amd64.exe\n\n  sign-linux:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Setup GPG Signing\n        env:\n          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}\n          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}\n        run: |\n          echo \"$GPG_PRIVATE_KEY\" | gpg --batch --import\n          echo \"$GPG_PASSPHRASE\" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback \\\n            --detach-sign --armor ./dist/pdfextract-linux-amd64\n```\n\nCreate certificate management scripts:\n\n```bash\n# scripts/cert-management/generate-certs.sh\n#!/bin/bash\n\n# Generate self-signed certificate for development\ngenerate_dev_cert() {\n    openssl req -x509 -newkey rsa:4096 -keyout dev-key.pem -out dev-cert.pem \\\n        -days 365 -nodes -subj \"/CN=PDFExtract Development\"\n}\n\n# Convert Apple certificate for GitHub Actions\nprepare_apple_cert() {\n    local p12_file=\"$1\"\n    base64 < \"$p12_file\" > apple-cert-base64.txt\n    echo \"Add contents of apple-cert-base64.txt to APPLE_CERT_BASE64 secret\"\n}\n\n# Convert Windows certificate\nprepare_windows_cert() {\n    local pfx_file=\"$1\"\n    base64 -w 0 < \"$pfx_file\" > windows-cert-base64.txt\n    echo \"Add contents of windows-cert-base64.txt to WINDOWS_CERT_BASE64 secret\"\n}\n```\n\nImplement signing verification:\n\n```go\n// internal/signing/verify.go\npackage signing\n\nimport (\n    \"crypto/x509\"\n    \"encoding/pem\"\n    \"fmt\"\n    \"os/exec\"\n    \"runtime\"\n)\n\ntype SignatureVerifier struct {\n    trustedCerts []*x509.Certificate\n}\n\nfunc (sv *SignatureVerifier) VerifyBinary(path string) error {\n    switch runtime.GOOS {\n    case \"darwin\":\n        return sv.verifyMacOS(path)\n    case \"windows\":\n        return sv.verifyWindows(path)\n    case \"linux\":\n        return sv.verifyLinux(path)\n    default:\n        return fmt.Errorf(\"unsupported platform: %s\", runtime.GOOS)\n    }\n}\n\nfunc (sv *SignatureVerifier) verifyMacOS(path string) error {\n    cmd := exec.Command(\"codesign\", \"--verify\", \"--deep\", \"--strict\", path)\n    output, err := cmd.CombinedOutput()\n    if err != nil {\n        return fmt.Errorf(\"codesign verification failed: %s\", output)\n    }\n    \n    // Check notarization status\n    cmd = exec.Command(\"spctl\", \"-a\", \"-v\", path)\n    output, err = cmd.CombinedOutput()\n    if err != nil {\n        return fmt.Errorf(\"notarization check failed: %s\", output)\n    }\n    return nil\n}\n\nfunc (sv *SignatureVerifier) verifyWindows(path string) error {\n    cmd := exec.Command(\"signtool\", \"verify\", \"/pa\", \"/v\", path)\n    output, err := cmd.CombinedOutput()\n    if err != nil {\n        return fmt.Errorf(\"signtool verification failed: %s\", output)\n    }\n    return nil\n}\n\nfunc (sv *SignatureVerifier) verifyLinux(path string) error {\n    // Verify GPG signature\n    sigPath := path + \".asc\"\n    cmd := exec.Command(\"gpg\", \"--verify\", sigPath, path)\n    output, err := cmd.CombinedOutput()\n    if err != nil {\n        return fmt.Errorf(\"GPG verification failed: %s\", output)\n    }\n    return nil\n}\n```\n\nCreate entitlements for macOS:\n\n```xml\n<!-- entitlements.plist -->\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>\n    <true/>\n    <key>com.apple.security.cs.disable-library-validation</key>\n    <true/>\n</dict>\n</plist>\n```\n\nDocumentation for certificate setup:\n\n```markdown\n# Code Signing Setup Guide\n\n## Prerequisites\n1. Apple Developer Account (for macOS)\n2. Windows Code Signing Certificate\n3. GPG Key (for Linux)\n\n## GitHub Actions Secrets Required\n\n### macOS\n- `APPLE_CERT_BASE64`: Base64 encoded .p12 certificate\n- `APPLE_CERT_PASSWORD`: Certificate password\n- `APPLE_DEVELOPER_ID`: Developer ID Application certificate name\n- `APPLE_ID`: Apple ID for notarization\n- `APPLE_APP_PASSWORD`: App-specific password\n\n### Windows\n- `WINDOWS_CERT_BASE64`: Base64 encoded .pfx certificate\n- `WINDOWS_CERT_PASSWORD`: Certificate password\n\n### Linux\n- `GPG_PRIVATE_KEY`: ASCII armored GPG private key\n- `GPG_PASSPHRASE`: GPG key passphrase\n\n## Certificate Generation Commands\n\n### macOS Development Certificate\n```bash\nsecurity create-keychain -p password build.keychain\nsecurity default-keychain -s build.keychain\nsecurity unlock-keychain -p password build.keychain\n```\n\n### Windows Self-Signed Certificate (Development)\n```powershell\nNew-SelfSignedCertificate -Type CodeSigningCert -Subject \"CN=PDFExtract Dev\" -KeyExportPolicy Exportable -CertStoreLocation Cert:\\CurrentUser\\My\n```\n\n### Linux GPG Key\n```bash\ngpg --full-generate-key\ngpg --armor --export-secret-keys YOUR_KEY_ID > private.asc\n```\n```",
+        "testStrategy": "Comprehensive testing strategy for code signing implementation:\n\n1. **Certificate Management Tests**:\n   - Test certificate import/export scripts with dummy certificates\n   - Verify base64 encoding/decoding for all certificate types\n   - Test keychain creation and certificate import on macOS CI\n   - Verify certificate installation on Windows CI\n   - Test GPG key import on Linux CI\n\n2. **Signing Process Tests**:\n   - Create test binaries for each platform\n   - Test signing workflow locally with development certificates\n   - Verify signed binaries can be executed without security warnings\n   - Test notarization workflow on macOS (may require real Apple Developer account)\n   - Verify Windows Authenticode signatures with signtool verify\n   - Test GPG signature creation and verification on Linux\n\n3. **GitHub Actions Integration Tests**:\n   - Create test workflow that runs on push to test branch\n   - Verify secrets are properly accessed and decoded\n   - Test signing steps with self-signed certificates in CI\n   - Verify artifact upload includes signed binaries\n   - Test failure scenarios (missing secrets, invalid certificates)\n\n4. **Verification Tests**:\n   - Implement automated verification for each platform\n   - Test SignatureVerifier.VerifyBinary() with signed and unsigned binaries\n   - Verify error handling for tampered binaries\n   - Test cross-platform verification (e.g., verify Windows binary on Linux)\n\n5. **End-to-End Release Tests**:\n   - Create test release tag to trigger full workflow\n   - Download and test signed binaries on each platform\n   - Verify macOS Gatekeeper acceptance\n   - Test Windows SmartScreen behavior\n   - Verify GPG signature with public key\n\n6. **Security Tests**:\n   - Ensure certificates are not exposed in logs\n   - Verify temporary files are cleaned up\n   - Test certificate rotation procedures\n   - Verify signing timestamps for long-term validity",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Set Up Certificate Management Scripts",
+            "description": "Create scripts to manage and convert certificates for macOS, Windows, and Linux platforms.",
+            "dependencies": [],
+            "details": "Implement scripts to generate development certificates and convert them to base64 for GitHub Actions.",
+            "status": "done",
+            "testStrategy": "Run the scripts to ensure certificates are generated and converted correctly."
+          },
+          {
+            "id": 2,
+            "title": "Configure GitHub Actions for Code Signing",
+            "description": "Set up GitHub Actions workflows to automate code signing for macOS, Windows, and Linux binaries.",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement workflows in .github/workflows/release.yml to handle code signing for each platform.",
+            "status": "done",
+            "testStrategy": "Trigger a release workflow and verify that binaries are signed correctly."
+          },
+          {
+            "id": 3,
+            "title": "Implement Signing Verification",
+            "description": "Develop a verification system to ensure that signed binaries are valid and trusted.",
+            "dependencies": [
+              2
+            ],
+            "details": "Create a Go module to verify signatures on macOS, Windows, and Linux binaries.",
+            "status": "done",
+            "testStrategy": "Run verification tests on signed binaries to ensure they pass signature checks."
+          },
+          {
+            "id": 4,
+            "title": "Create macOS Entitlements",
+            "description": "Define entitlements for macOS binaries to ensure proper execution and security compliance.",
+            "dependencies": [
+              2
+            ],
+            "details": "Develop an entitlements.plist file with necessary permissions for macOS applications.",
+            "status": "done",
+            "testStrategy": "Test the signed macOS binary to ensure it runs with the specified entitlements."
+          },
+          {
+            "id": 5,
+            "title": "Document Code Signing Setup",
+            "description": "Create comprehensive documentation for setting up and managing code signing across platforms.",
+            "dependencies": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "details": "Write a guide detailing prerequisites, setup steps, and GitHub Actions secrets required for code signing.",
+            "status": "done",
+            "testStrategy": "Review the documentation for completeness and accuracy, ensuring it covers all necessary steps."
+          }
+        ]
+      },
+      {
+        "id": 17,
+        "title": "Fix GitHub Actions Release Workflow for Tag-Based Releases",
+        "description": "Update the GitHub Actions release workflow to properly handle tag-triggered releases by replacing existing release information, automatically generating release notes from commit history between tags, and implementing proper draft/pre-release state management.",
+        "details": "Implement comprehensive fixes to the GitHub Actions release workflow to handle tag-based releases properly:\n\n```yaml\n# .github/workflows/release.yml\nname: Release\non:\n  push:\n    tags:\n      - 'v*'\n\njobs:\n  create-release:\n    runs-on: ubuntu-latest\n    outputs:\n      release_id: ${{ steps.create_release.outputs.id }}\n      upload_url: ${{ steps.create_release.outputs.upload_url }}\n    steps:\n      - name: Checkout code\n        uses: actions/checkout@v4\n        with:\n          fetch-depth: 0  # Full history for changelog generation\n\n      - name: Get previous tag\n        id: prev_tag\n        run: |\n          CURRENT_TAG=${GITHUB_REF#refs/tags/}\n          PREVIOUS_TAG=$(git describe --tags --abbrev=0 $CURRENT_TAG^ 2>/dev/null || echo \"\")\n          echo \"current_tag=$CURRENT_TAG\" >> $GITHUB_OUTPUT\n          echo \"previous_tag=$PREVIOUS_TAG\" >> $GITHUB_OUTPUT\n\n      - name: Generate release notes\n        id: release_notes\n        run: |\n          CURRENT_TAG=${{ steps.prev_tag.outputs.current_tag }}\n          PREVIOUS_TAG=${{ steps.prev_tag.outputs.previous_tag }}\n          \n          # Generate changelog from commits\n          if [ -z \"$PREVIOUS_TAG\" ]; then\n            CHANGELOG=$(git log --pretty=format:\"- %s (%h)\" --reverse)\n          else\n            CHANGELOG=$(git log --pretty=format:\"- %s (%h)\" --reverse ${PREVIOUS_TAG}..${CURRENT_TAG})\n          fi\n          \n          # Group commits by type\n          FEATURES=$(echo \"$CHANGELOG\" | grep -E \"^- (feat|feature):\" || true)\n          FIXES=$(echo \"$CHANGELOG\" | grep -E \"^- (fix|bugfix):\" || true)\n          DOCS=$(echo \"$CHANGELOG\" | grep -E \"^- (docs|documentation):\" || true)\n          OTHER=$(echo \"$CHANGELOG\" | grep -vE \"^- (feat|feature|fix|bugfix|docs|documentation):\" || true)\n          \n          # Build release notes\n          NOTES=\"## What's Changed\"\n          \n          if [ -n \"$FEATURES\" ]; then\n            NOTES=\"$NOTES\\n\\n### 🚀 Features\\n$FEATURES\"\n          fi\n          \n          if [ -n \"$FIXES\" ]; then\n            NOTES=\"$NOTES\\n\\n### 🐛 Bug Fixes\\n$FIXES\"\n          fi\n          \n          if [ -n \"$DOCS\" ]; then\n            NOTES=\"$NOTES\\n\\n### 📚 Documentation\\n$DOCS\"\n          fi\n          \n          if [ -n \"$OTHER\" ]; then\n            NOTES=\"$NOTES\\n\\n### 🔧 Other Changes\\n$OTHER\"\n          fi\n          \n          # Add comparison link\n          if [ -n \"$PREVIOUS_TAG\" ]; then\n            NOTES=\"$NOTES\\n\\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${CURRENT_TAG}\"\n          fi\n          \n          # Save to file to handle multiline content\n          echo -e \"$NOTES\" > release_notes.md\n          echo \"notes_file=release_notes.md\" >> $GITHUB_OUTPUT\n\n      - name: Check if release exists\n        id: check_release\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n        run: |\n          TAG=${{ steps.prev_tag.outputs.current_tag }}\n          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/$TAG --jq '.id' 2>/dev/null || echo \"\")\n          echo \"release_id=$RELEASE_ID\" >> $GITHUB_OUTPUT\n          echo \"exists=$([[ -n \"$RELEASE_ID\" ]] && echo \"true\" || echo \"false\")\" >> $GITHUB_OUTPUT\n\n      - name: Delete existing release\n        if: steps.check_release.outputs.exists == 'true'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n        run: |\n          gh api -X DELETE repos/${{ github.repository }}/releases/${{ steps.check_release.outputs.release_id }}\n          echo \"Deleted existing release for tag ${{ steps.prev_tag.outputs.current_tag }}\"\n\n      - name: Determine release type\n        id: release_type\n        run: |\n          TAG=${{ steps.prev_tag.outputs.current_tag }}\n          \n          # Check if pre-release (contains alpha, beta, rc, etc.)\n          if [[ \"$TAG\" =~ -(alpha|beta|rc|pre|preview|dev)\\. ]]; then\n            echo \"prerelease=true\" >> $GITHUB_OUTPUT\n            echo \"draft=false\" >> $GITHUB_OUTPUT\n          # Check if draft (contains draft or ends with -draft)\n          elif [[ \"$TAG\" =~ -draft$ ]] || [[ \"$TAG\" =~ -draft\\. ]]; then\n            echo \"prerelease=false\" >> $GITHUB_OUTPUT\n            echo \"draft=true\" >> $GITHUB_OUTPUT\n          else\n            echo \"prerelease=false\" >> $GITHUB_OUTPUT\n            echo \"draft=false\" >> $GITHUB_OUTPUT\n          fi\n\n      - name: Create release\n        id: create_release\n        uses: actions/create-release@v1\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n        with:\n          tag_name: ${{ steps.prev_tag.outputs.current_tag }}\n          release_name: Release ${{ steps.prev_tag.outputs.current_tag }}\n          body_path: ${{ steps.release_notes.outputs.notes_file }}\n          draft: ${{ steps.release_type.outputs.draft }}\n          prerelease: ${{ steps.release_type.outputs.prerelease }}\n\n  build-and-upload:\n    needs: create-release\n    strategy:\n      matrix:\n        include:\n          - os: ubuntu-latest\n            asset_name: app-linux-amd64\n          - os: macos-latest\n            asset_name: app-darwin-amd64\n          - os: windows-latest\n            asset_name: app-windows-amd64.exe\n    runs-on: ${{ matrix.os }}\n    steps:\n      - uses: actions/checkout@v4\n      \n      - name: Build\n        run: |\n          # Build commands here\n          echo \"Building for ${{ matrix.os }}\"\n          \n      - name: Upload Release Asset\n        uses: actions/upload-release-asset@v1\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n        with:\n          upload_url: ${{ needs.create-release.outputs.upload_url }}\n          asset_path: ./build/${{ matrix.asset_name }}\n          asset_name: ${{ matrix.asset_name }}\n          asset_content_type: application/octet-stream\n```\n\nAdditional considerations for the implementation:\n\n1. **Release Notes Generation Script** (optional standalone script):\n```bash\n#!/bin/bash\n# scripts/generate-release-notes.sh\n\nCURRENT_TAG=$1\nPREVIOUS_TAG=$2\nOUTPUT_FORMAT=${3:-markdown}\n\ngenerate_conventional_changelog() {\n    local from=$1\n    local to=$2\n    \n    # Define commit type mappings\n    declare -A type_headers=(\n        [\"feat\"]=\"🚀 Features\"\n        [\"fix\"]=\"🐛 Bug Fixes\"\n        [\"docs\"]=\"📚 Documentation\"\n        [\"style\"]=\"💎 Styles\"\n        [\"refactor\"]=\"📦 Code Refactoring\"\n        [\"perf\"]=\"🚀 Performance Improvements\"\n        [\"test\"]=\"🚨 Tests\"\n        [\"build\"]=\"🛠 Build System\"\n        [\"ci\"]=\"⚙️ Continuous Integration\"\n        [\"chore\"]=\"♻️ Chores\"\n        [\"revert\"]=\"🗑 Reverts\"\n    )\n    \n    # Extract and group commits\n    for type in \"${!type_headers[@]}\"; do\n        commits=$(git log --pretty=format:\"- %s (%h)\" --grep=\"^${type}:\" ${from}..${to})\n        if [ -n \"$commits\" ]; then\n            echo \"### ${type_headers[$type]}\"\n            echo \"$commits\"\n            echo \"\"\n        fi\n    done\n}\n```\n\n2. **GitHub API Integration for Advanced Features**:\n```yaml\n- name: Update release with additional metadata\n  env:\n    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n  run: |\n    # Add custom fields to release\n    gh api -X PATCH repos/${{ github.repository }}/releases/${{ steps.create_release.outputs.id }} \\\n      --field discussion_category_name=\"Releases\" \\\n      --field generate_release_notes=false\n```\n\n3. **Error Handling and Retry Logic**:\n```yaml\n- name: Create release with retry\n  uses: nick-invision/retry@v2\n  with:\n    timeout_minutes: 5\n    max_attempts: 3\n    retry_on: error\n    command: |\n      gh release create ${{ steps.prev_tag.outputs.current_tag }} \\\n        --title \"Release ${{ steps.prev_tag.outputs.current_tag }}\" \\\n        --notes-file release_notes.md \\\n        ${{ steps.release_type.outputs.draft == 'true' && '--draft' || '' }} \\\n        ${{ steps.release_type.outputs.prerelease == 'true' && '--prerelease' || '' }}\n```",
+        "testStrategy": "Comprehensive testing strategy for the GitHub Actions release workflow:\n\n1. **Tag Detection and Parsing Tests**:\n   - Test with various tag formats: `v1.0.0`, `v2.1.0-beta.1`, `v3.0.0-rc.1`, `v1.0.0-draft`\n   - Verify correct detection of current and previous tags\n   - Test edge cases: first release (no previous tag), non-sequential tags\n   - Validate tag pattern matching for triggering workflow\n\n2. **Release Notes Generation Tests**:\n   - Create test repository with conventional commits between tags\n   - Verify correct grouping of commits by type (feat, fix, docs, etc.)\n   - Test with empty commit ranges and single commit releases\n   - Validate markdown formatting and special character escaping\n   - Test commit message parsing with various formats\n\n3. **Release Management Tests**:\n   - Test detection of existing releases for a tag\n   - Verify successful deletion of existing releases before recreation\n   - Test API error handling when release doesn't exist\n   - Validate release creation with correct metadata\n\n4. **Draft/Pre-release Logic Tests**:\n   - Test tags with pre-release identifiers: `-alpha`, `-beta`, `-rc`, `-pre`\n   - Verify draft detection for tags ending with `-draft`\n   - Test standard release tags create non-draft, non-prerelease\n   - Validate boolean flag propagation to release creation\n\n5. **Integration Tests**:\n   - Create test workflow that triggers on push to test tags\n   - Verify complete workflow execution from tag push to release creation\n   - Test with multiple platform builds uploading to same release\n   - Validate asset upload URLs are correctly passed between jobs\n\n6. **Error Handling Tests**:\n   - Test behavior when GitHub API rate limits are hit\n   - Verify graceful handling of network failures\n   - Test with invalid GitHub tokens\n   - Validate workflow behavior when previous steps fail\n\n7. **Manual Testing Checklist**:\n   - Push a new version tag and verify release is created\n   - Push same tag again and verify old release is replaced\n   - Test with pre-release tag (e.g., `v1.0.0-beta.1`)\n   - Test with draft tag (e.g., `v1.0.0-draft`)\n   - Verify release notes contain commits since last tag\n   - Check that release assets are properly uploaded\n   - Validate release appears correctly in GitHub UI",
+        "status": "done",
+        "dependencies": [
+          16
+        ],
+        "priority": "high",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Update Release Workflow to Handle Existing Releases",
+            "description": "Modify the GitHub Actions workflow to check for existing releases and delete them if necessary before creating a new release.",
+            "dependencies": [],
+            "details": "Implement a step in the workflow to check if a release already exists for the current tag and delete it if it does.",
+            "status": "done",
+            "testStrategy": "Test by creating a release with an existing tag and ensure it is deleted and replaced with a new release."
+          },
+          {
+            "id": 2,
+            "title": "Implement Release Notes Generation",
+            "description": "Enhance the workflow to automatically generate release notes from commit history between tags.",
+            "dependencies": [
+              1
+            ],
+            "details": "Use git log to extract commit messages and categorize them into features, fixes, and other changes for release notes.",
+            "status": "done",
+            "testStrategy": "Verify that release notes are correctly generated and formatted based on commit messages."
+          },
+          {
+            "id": 3,
+            "title": "Add Draft and Pre-release State Management",
+            "description": "Implement logic to determine if a release should be a draft or pre-release based on the tag name.",
+            "dependencies": [
+              2
+            ],
+            "details": "Use regex to check the tag name for indicators of draft or pre-release status and set the release state accordingly.",
+            "status": "done",
+            "testStrategy": "Test with various tag names to ensure the correct release state is applied."
+          },
+          {
+            "id": 4,
+            "title": "Integrate GitHub API for Metadata Updates",
+            "description": "Use the GitHub API to add additional metadata to releases, such as discussion categories.",
+            "dependencies": [
+              3
+            ],
+            "details": "Implement a step in the workflow to update the release with additional metadata using the GitHub API.",
+            "status": "done",
+            "testStrategy": "Check that the release metadata is correctly updated by inspecting the release details on GitHub."
+          },
+          {
+            "id": 5,
+            "title": "Implement Error Handling and Retry Logic",
+            "description": "Add error handling and retry logic to the release creation process to ensure robustness.",
+            "dependencies": [
+              4
+            ],
+            "details": "Use a retry mechanism to handle transient errors during release creation, with configurable timeout and retry attempts.",
+            "status": "done",
+            "testStrategy": "Simulate errors during release creation and verify that the retry logic successfully handles them."
+          }
+        ]
+      },
+      {
+        "id": 18,
+        "title": "Create Automated Release Preparation System",
+        "description": "Design and implement a comprehensive release automation system that handles version tagging, changelog generation from commit history, release note compilation, and orchestrates the complete release process including pre-release checks and post-release notifications.",
+        "details": "Implement a complete release preparation system with multiple components:\n\n```go\n// internal/release/manager.go\npackage release\n\ntype ReleaseManager struct {\n    git         *GitClient\n    changelog   *ChangelogGenerator\n    versioning  *VersionManager\n    validator   *ReleaseValidator\n    notifier    *ReleaseNotifier\n}\n\nfunc (rm *ReleaseManager) PrepareRelease(version string, releaseType ReleaseType) (*Release, error) {\n    // 1. Validate version format\n    if err := rm.versioning.ValidateVersion(version); err != nil {\n        return nil, fmt.Errorf(\"invalid version: %w\", err)\n    }\n    \n    // 2. Run pre-release checks\n    if err := rm.validator.RunPreReleaseChecks(); err != nil {\n        return nil, fmt.Errorf(\"pre-release checks failed: %w\", err)\n    }\n    \n    // 3. Generate changelog\n    changelog, err := rm.changelog.Generate(version)\n    if err != nil {\n        return nil, fmt.Errorf(\"changelog generation failed: %w\", err)\n    }\n    \n    // 4. Create release object\n    release := &Release{\n        Version:     version,\n        Type:        releaseType,\n        Changelog:   changelog,\n        CreatedAt:   time.Now(),\n    }\n    \n    return release, nil\n}\n\n// internal/release/changelog.go\ntype ChangelogGenerator struct {\n    git    *GitClient\n    parser *CommitParser\n}\n\nfunc (cg *ChangelogGenerator) Generate(targetVersion string) (*Changelog, error) {\n    // Get previous version tag\n    prevTag, err := cg.git.GetPreviousTag(targetVersion)\n    if err != nil {\n        prevTag = \"\" // First release\n    }\n    \n    // Get commits between tags\n    commits, err := cg.git.GetCommitsBetween(prevTag, \"HEAD\")\n    if err != nil {\n        return nil, err\n    }\n    \n    // Parse and categorize commits\n    changelog := &Changelog{\n        Version:  targetVersion,\n        Date:     time.Now(),\n        Sections: make(map[string][]ChangeEntry),\n    }\n    \n    for _, commit := range commits {\n        entry := cg.parser.ParseCommit(commit)\n        if entry != nil {\n            changelog.AddEntry(entry)\n        }\n    }\n    \n    return changelog, nil\n}\n\n// internal/release/version.go\ntype VersionManager struct {\n    strategy VersionStrategy\n}\n\nfunc (vm *VersionManager) NextVersion(currentVersion string, bumpType BumpType) (string, error) {\n    current, err := semver.Parse(currentVersion)\n    if err != nil {\n        return \"\", err\n    }\n    \n    switch bumpType {\n    case BumpMajor:\n        return fmt.Sprintf(\"v%d.0.0\", current.Major+1), nil\n    case BumpMinor:\n        return fmt.Sprintf(\"v%d.%d.0\", current.Major, current.Minor+1), nil\n    case BumpPatch:\n        return fmt.Sprintf(\"v%d.%d.%d\", current.Major, current.Minor, current.Patch+1), nil\n    }\n    \n    return \"\", fmt.Errorf(\"unknown bump type: %v\", bumpType)\n}\n\n// internal/release/validator.go\ntype ReleaseValidator struct {\n    checks []ReleaseCheck\n}\n\nfunc (rv *ReleaseValidator) RunPreReleaseChecks() error {\n    for _, check := range rv.checks {\n        if err := check.Run(); err != nil {\n            return fmt.Errorf(\"check '%s' failed: %w\", check.Name(), err)\n        }\n    }\n    return nil\n}\n\n// Implement various checks\ntype TestsPassCheck struct{}\nfunc (t *TestsPassCheck) Run() error {\n    // Run go test ./...\n    cmd := exec.Command(\"go\", \"test\", \"./...\")\n    if err := cmd.Run(); err != nil {\n        return fmt.Errorf(\"tests failed\")\n    }\n    return nil\n}\n\ntype BuildCheck struct{}\nfunc (b *BuildCheck) Run() error {\n    // Verify build succeeds\n    cmd := exec.Command(\"go\", \"build\", \"./...\")\n    return cmd.Run()\n}\n\n// cmd/release/main.go\npackage main\n\nimport (\n    \"github.com/spf13/cobra\"\n)\n\nfunc main() {\n    rootCmd := &cobra.Command{\n        Use:   \"release\",\n        Short: \"Automated release preparation tool\",\n    }\n    \n    prepareCmd := &cobra.Command{\n        Use:   \"prepare [version]\",\n        Short: \"Prepare a new release\",\n        RunE: func(cmd *cobra.Command, args []string) error {\n            manager := release.NewManager()\n            \n            version := args[0]\n            releaseType, _ := cmd.Flags().GetString(\"type\")\n            \n            rel, err := manager.PrepareRelease(version, releaseType)\n            if err != nil {\n                return err\n            }\n            \n            // Output release information\n            fmt.Printf(\"Release %s prepared successfully\\n\", rel.Version)\n            fmt.Printf(\"Changelog:\\n%s\\n\", rel.Changelog.Format())\n            \n            return nil\n        },\n    }\n    \n    rootCmd.AddCommand(prepareCmd)\n    rootCmd.Execute()\n}\n\n// .github/workflows/release-automation.yml\nname: Automated Release Process\non:\n  workflow_dispatch:\n    inputs:\n      version:\n        description: 'Release version (e.g., v1.2.3)'\n        required: true\n      release_type:\n        description: 'Release type'\n        type: choice\n        options:\n          - stable\n          - beta\n          - rc\n\njobs:\n  prepare-release:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n          \n      - name: Setup Go\n        uses: actions/setup-go@v4\n        with:\n          go-version: '1.21'\n          \n      - name: Run Release Preparation\n        run: |\n          go run cmd/release/main.go prepare ${{ github.event.inputs.version }} \\\n            --type ${{ github.event.inputs.release_type }}\n            \n      - name: Create Release PR\n        uses: peter-evans/create-pull-request@v5\n        with:\n          title: \"Release ${{ github.event.inputs.version }}\"\n          body: |\n            Automated release preparation for version ${{ github.event.inputs.version }}\n            \n            ## Checklist\n            - [ ] Tests passing\n            - [ ] Changelog reviewed\n            - [ ] Version bumped\n            - [ ] Documentation updated\n          branch: release/${{ github.event.inputs.version }}\n\n// internal/release/templates/changelog.tmpl\n# Changelog\n\n## [{{ .Version }}] - {{ .Date.Format \"2006-01-02\" }}\n\n{{ range $section, $entries := .Sections }}\n### {{ $section }}\n{{ range $entries }}\n- {{ .Description }} ({{ .CommitHash }})\n{{ end }}\n{{ end }}\n\n## Previous Releases\n{{ .PreviousContent }}\n\n// pkg/models/release.go\ntype Release struct {\n    Version     string\n    Type        ReleaseType\n    Changelog   *Changelog\n    Assets      []ReleaseAsset\n    CreatedAt   time.Time\n    PublishedAt *time.Time\n}\n\ntype Changelog struct {\n    Version  string\n    Date     time.Time\n    Sections map[string][]ChangeEntry\n}\n\ntype ChangeEntry struct {\n    Type        string // feat, fix, docs, etc.\n    Scope       string\n    Description string\n    CommitHash  string\n    Author      string\n    Breaking    bool\n}",
+        "testStrategy": "Comprehensive testing strategy for the release preparation system:\n\n1. **Version Management Tests**:\n   - Test semantic version parsing and validation\n   - Verify version bumping logic (major, minor, patch)\n   - Test pre-release version handling (beta, rc)\n   - Validate version format compliance\n\n2. **Changelog Generation Tests**:\n   - Mock git repository with various commit patterns\n   - Test conventional commit parsing (feat:, fix:, docs:, etc.)\n   - Verify commit categorization and grouping\n   - Test changelog formatting with different templates\n   - Handle edge cases: first release, no commits, merge commits\n\n3. **Pre-release Validation Tests**:\n   - Mock successful and failing test runs\n   - Verify build check execution\n   - Test custom validation rules\n   - Ensure proper error reporting and aggregation\n\n4. **Integration Tests**:\n   - Test complete release preparation flow\n   - Verify file generation (CHANGELOG.md, VERSION)\n   - Test git operations (tag creation, commit)\n   - Validate GitHub Actions workflow execution\n\n5. **CLI Tests**:\n   - Test command parsing and validation\n   - Verify output formatting\n   - Test interactive mode prompts\n   - Validate error handling and help text\n\n6. **End-to-End Tests**:\n   - Create test repository with sample commits\n   - Run full release preparation\n   - Verify all artifacts are created correctly\n   - Test rollback on failure",
+        "status": "done",
+        "dependencies": [
+          16,
+          17
+        ],
+        "priority": "medium",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Version Validation and Management",
+            "description": "Develop the version validation and management component to ensure correct version formats and calculate the next version based on the bump type.",
+            "dependencies": [],
+            "details": "Create methods to validate version formats and determine the next version using semantic versioning rules.",
+            "status": "done",
+            "testStrategy": "Write unit tests to validate version formats and ensure correct version bumping."
+          },
+          {
+            "id": 2,
+            "title": "Develop Pre-Release Validation Checks",
+            "description": "Implement pre-release validation checks to ensure code quality and build integrity before proceeding with the release.",
+            "dependencies": [],
+            "details": "Create checks such as running tests and verifying build success to ensure the codebase is ready for release.",
+            "status": "done",
+            "testStrategy": "Simulate various scenarios where checks fail and pass to ensure robustness."
+          },
+          {
+            "id": 3,
+            "title": "Create Changelog Generation System",
+            "description": "Design and implement a system to generate changelogs from commit history, categorizing changes appropriately.",
+            "dependencies": [
+              1
+            ],
+            "details": "Use commit history to generate a structured changelog, categorizing changes by type and scope.",
+            "status": "done",
+            "testStrategy": "Test with different commit histories to ensure accurate and comprehensive changelog generation."
+          },
+          {
+            "id": 4,
+            "title": "Integrate Release Preparation Workflow",
+            "description": "Integrate all components into a cohesive release preparation workflow that automates the release process.",
+            "dependencies": [
+              1,
+              2,
+              3
+            ],
+            "details": "Combine version management, validation checks, and changelog generation into a single automated workflow.",
+            "status": "done",
+            "testStrategy": "Perform end-to-end testing of the release preparation process to ensure all components work together seamlessly."
+          },
+          {
+            "id": 5,
+            "title": "Implement Post-Release Notification System",
+            "description": "Develop a notification system to inform stakeholders of release completion and provide release details.",
+            "dependencies": [
+              4
+            ],
+            "details": "Create a notification mechanism to send release details and changelogs to relevant stakeholders after release completion.",
+            "status": "done",
+            "testStrategy": "Test notifications with various stakeholders to ensure timely and accurate information delivery."
+          }
+        ]
       }
     ],
     "metadata": {
       "created": "2025-06-20T03:09:52.219Z",
-      "updated": "2025-06-20T06:06:23.400Z",
+      "updated": "2025-06-20T06:19:54.593Z",
       "description": "Tasks for master context"
     }
   }

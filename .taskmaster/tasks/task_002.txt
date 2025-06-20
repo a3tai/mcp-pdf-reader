@@ -1,0 +1,36 @@
+# Task ID: 2
+# Title: Implement Core PDF Parser with Validation
+# Status: done
+# Dependencies: 1
+# Priority: high
+# Description: Build the foundational PDF parsing engine that can read, validate, and parse basic PDF file structure according to PDF 1.4/1.7 specifications
+# Details:
+Implement PDF parser using pure Go (no CGO dependencies):
+
+```go
+// internal/pdf/parser.go
+type PDFParser struct {
+    file     io.ReadSeeker
+    xref     *CrossReferenceTable
+    trailer  map[string]Object
+}
+
+func (p *PDFParser) Parse() error {
+    // 1. Read PDF header (%PDF-1.x)
+    // 2. Parse cross-reference table
+    // 3. Read trailer dictionary
+    // 4. Build object catalog
+}
+
+// internal/pdf/validator.go
+func ValidatePDF(path string) (*ValidationResult, error) {
+    // Check file signature
+    // Verify xref table
+    // Validate object structure
+}
+```
+
+Consider using pdfcpu (Apache 2.0 license) as a base library or reference implementation. Implement pdf_validate_file MCP tool.
+
+# Test Strategy:
+Test with various PDF versions (1.4, 1.7), corrupted files, and edge cases. Validate against example PDFs in docs/examples/. Ensure proper error handling for malformed PDFs.

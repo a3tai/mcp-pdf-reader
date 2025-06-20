@@ -1,0 +1,39 @@
+# Task ID: 3
+# Title: Build Content Stream Parser for Text Extraction
+# Status: done
+# Dependencies: 2
+# Priority: high
+# Description: Implement PDF content stream parsing to extract basic text content, handling PDF operators and text positioning commands
+# Details:
+Parse PDF content streams and implement text extraction:
+
+```go
+// internal/pdf/content_stream.go
+type ContentStreamParser struct {
+    stream []byte
+    state  GraphicsState
+    text   []ExtractedText
+}
+
+// Handle PDF operators: BT, ET, Tf, Tm, Tj, TJ
+func (p *ContentStreamParser) parseOperator(op string, operands []Object) {
+    switch op {
+    case "BT": // Begin text
+    case "Tf": // Set font
+    case "Tm": // Text matrix
+    case "Tj": // Show text
+    }
+}
+
+// internal/extractors/text.go
+func ExtractText(page *PDFPage) (string, error) {
+    // Parse content stream
+    // Extract text runs
+    // Join into coherent text
+}
+```
+
+Implement pdf_read_file MCP tool for basic text extraction.
+
+# Test Strategy:
+Test text extraction accuracy against known PDFs with various fonts, encodings, and layouts. Compare output with expected text content. Verify handling of special characters and Unicode.

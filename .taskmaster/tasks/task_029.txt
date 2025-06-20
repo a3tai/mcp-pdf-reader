@@ -1,0 +1,258 @@
+# Task ID: 29
+# Title: Standardize Element Counting Across PDF Extraction Modes
+# Status: pending
+# Dependencies: 2, 3, 4, 5, 9, 10
+# Priority: medium
+# Description: Implement consistent element counting and normalization across all PDF extraction modes (complete, semantic, structured) to ensure predictable and comparable results when processing the same document.
+# Details:
+Implement a unified element counting and normalization system that provides consistent results across different extraction modes:
+
+```go
+// internal/pdf/extraction/element_normalizer.go
+package extraction
+
+import (
+    "github.com/yourusername/pdfextract/pkg/models"
+)
+
+type ElementNormalizer struct {
+    mode           ExtractionMode
+    countingRules  *CountingRules
+    mappingEngine  *ElementMappingEngine
+}
+
+type CountingRules struct {
+    // Define what constitutes an "element" in each mode
+    CompleteMode   ElementDefinition
+    SemanticMode   ElementDefinition
+    StructuredMode ElementDefinition
+}
+
+type ElementDefinition struct {
+    CountTextBlocks      bool
+    CountImages         bool
+    CountTables         bool
+    CountFormFields     bool
+    CountAnnotations    bool
+    MergeAdjacentText   bool
+    MinTextLength       int
+    GroupingThreshold   float64
+}
+
+// Normalize elements to ensure consistent counting
+func (en *ElementNormalizer) NormalizeElements(raw []interface{}) ([]models.Element, error) {
+    normalized := make([]models.Element, 0)
+    
+    switch en.mode {
+    case CompleteMode:
+        // In complete mode, count every distinct object
+        for _, item := range raw {
+            if elem := en.processCompleteElement(item); elem != nil {
+                normalized = append(normalized, elem)
+            }
+        }
+        
+    case SemanticMode:
+        // In semantic mode, group related elements
+        grouped := en.groupSemanticElements(raw)
+        for _, group := range grouped {
+            if elem := en.processSemanticGroup(group); elem != nil {
+                normalized = append(normalized, elem)
+            }
+        }
+        
+    case StructuredMode:
+        // In structured mode, only count high-level structures
+        structures := en.extractStructures(raw)
+        for _, struct := range structures {
+            if elem := en.processStructure(struct); elem != nil {
+                normalized = append(normalized, elem)
+            }
+        }
+    }
+    
+    return normalized, nil
+}
+
+// internal/pdf/extraction/mode_reconciler.go
+type ModeReconciler struct {
+    normalizers map[ExtractionMode]*ElementNormalizer
+    validator   *ConsistencyValidator
+}
+
+func (mr *ModeReconciler) ReconcileResults(results map[ExtractionMode][]interface{}) (*ReconciliationReport, error) {
+    report := &ReconciliationReport{
+        Modes: make(map[ExtractionMode]*ModeResult),
+    }
+    
+    // Normalize each mode's results
+    for mode, rawElements := range results {
+        normalizer := mr.normalizers[mode]
+        normalized, err := normalizer.NormalizeElements(rawElements)
+        if err != nil {
+            return nil, fmt.Errorf("normalization failed for %s mode: %w", mode, err)
+        }
+        
+        report.Modes[mode] = &ModeResult{
+            ElementCount:     len(normalized),
+            Elements:         normalized,
+            NormalizationLog: normalizer.GetLog(),
+        }
+    }
+    
+    // Validate consistency
+    validation := mr.validator.ValidateConsistency(report)
+    report.ConsistencyScore = validation.Score
+    report.Discrepancies = validation.Discrepancies
+    
+    return report, nil
+}
+
+// internal/pdf/extraction/consistency_validator.go
+type ConsistencyValidator struct {
+    tolerances ConsistencyTolerances
+}
+
+type ConsistencyTolerances struct {
+    // Acceptable variance between modes
+    TextCountVariance      float64 // e.g., 0.1 = 10% variance allowed
+    StructureCountVariance float64
+    TotalElementVariance   float64
+}
+
+func (cv *ConsistencyValidator) ValidateConsistency(report *ReconciliationReport) *ValidationResult {
+    result := &ValidationResult{
+        Score: 1.0,
+        Discrepancies: make([]Discrepancy, 0),
+    }
+    
+    // Compare element counts between modes
+    counts := make(map[ExtractionMode]int)
+    for mode, modeResult := range report.Modes {
+        counts[mode] = modeResult.ElementCount
+    }
+    
+    // Check if counts are within acceptable variance
+    if variance := cv.calculateVariance(counts); variance > cv.tolerances.TotalElementVariance {
+        result.Score -= 0.3
+        result.Discrepancies = append(result.Discrepancies, Discrepancy{
+            Type:        "element_count_mismatch",
+            Description: fmt.Sprintf("Element count variance %.2f exceeds tolerance %.2f", variance, cv.tolerances.TotalElementVariance),
+            Severity:    "high",
+            Details:     counts,
+        })
+    }
+    
+    // Validate element mapping between modes
+    mapping := cv.mapElementsBetweenModes(report)
+    for _, issue := range mapping.Issues {
+        result.Discrepancies = append(result.Discrepancies, issue)
+        result.Score -= 0.1
+    }
+    
+    return result
+}
+
+// pkg/models/extraction.go
+type Element interface {
+    GetID() string
+    GetType() ElementType
+    GetContent() interface{}
+    GetBounds() *BoundingBox
+    GetPage() int
+}
+
+type ElementType string
+
+const (
+    ElementTypeText       ElementType = "text"
+    ElementTypeImage      ElementType = "image"
+    ElementTypeTable      ElementType = "table"
+    ElementTypeForm       ElementType = "form"
+    ElementTypeAnnotation ElementType = "annotation"
+    ElementTypeStructure  ElementType = "structure"
+)
+
+// Update extraction modes to use normalized counting
+func (e *Extractor) Extract(doc *PDFDocument, mode ExtractionMode) (*ExtractionResult, error) {
+    // Extract raw elements based on mode
+    rawElements := e.extractRawElements(doc, mode)
+    
+    // Normalize elements for consistent counting
+    normalizer := NewElementNormalizer(mode)
+    normalized, err := normalizer.NormalizeElements(rawElements)
+    if err != nil {
+        return nil, fmt.Errorf("element normalization failed: %w", err)
+    }
+    
+    return &ExtractionResult{
+        Mode:         mode,
+        Elements:     normalized,
+        ElementCount: len(normalized),
+        Metadata:     e.extractMetadata(doc),
+    }, nil
+}
+```
+
+Key implementation considerations:
+
+1. **Element Definition Standardization**:
+   - Define clear rules for what constitutes an "element" in each mode
+   - Complete mode: Every distinct PDF object (text run, image, annotation)
+   - Semantic mode: Logically grouped content (paragraphs, sections, tables)
+   - Structured mode: High-level document structures only
+
+2. **Normalization Rules**:
+   - Merge adjacent text runs in semantic/structured modes
+   - Group related form fields as single elements
+   - Count table cells vs entire tables based on mode
+   - Handle empty or whitespace-only elements consistently
+
+3. **Cross-Mode Mapping**:
+   - Maintain element IDs that allow tracking across modes
+   - Create mapping tables showing how elements in one mode relate to others
+   - Provide clear documentation on expected count differences
+
+4. **Consistency Validation**:
+   - Implement validators to ensure reasonable variance between modes
+   - Flag unexpected discrepancies for investigation
+   - Provide detailed reports on element counting decisions
+
+# Test Strategy:
+Comprehensive testing strategy for consistent element counting across extraction modes:
+
+1. **Baseline Document Tests**:
+   - Create test PDFs with known element counts (e.g., 10 paragraphs, 5 images, 3 tables)
+   - Extract using all three modes and verify normalized counts
+   - Document should show predictable count relationships (e.g., complete >= semantic >= structured)
+   - Test with simple single-page documents first
+
+2. **Element Type Coverage**:
+   - Test documents with only text elements
+   - Test documents with mixed content (text, images, tables, forms)
+   - Verify each element type is counted consistently according to mode rules
+   - Test edge cases: empty paragraphs, single-character text runs, invisible elements
+
+3. **Mode-Specific Validation**:
+   - Complete mode: Verify every PDF object is counted
+   - Semantic mode: Verify logical grouping (adjacent text merged, table cells grouped)
+   - Structured mode: Verify only high-level structures counted
+   - Compare counts and ensure they follow expected patterns
+
+4. **Regression Testing**:
+   - Test with the document mentioned in the issue (116 vs 1 vs 0 elements)
+   - Verify all modes now return reasonable, explainable counts
+   - Document the normalization decisions that lead to final counts
+   - Ensure no mode returns 0 elements for non-empty documents
+
+5. **Performance Testing**:
+   - Verify normalization doesn't significantly impact extraction performance
+   - Test with large documents (1000+ pages)
+   - Monitor memory usage during normalization
+   - Ensure element mapping doesn't create memory leaks
+
+6. **Integration Testing**:
+   - Test with existing extraction workflows
+   - Verify downstream consumers handle normalized elements correctly
+   - Test with pdf_analyze_document tool to ensure compatibility
+   - Validate that element IDs remain consistent for cross-referencing

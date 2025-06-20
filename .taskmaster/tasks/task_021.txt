@@ -1,0 +1,253 @@
+# Task ID: 21
+# Title: Update MCP Tool Descriptions for Clarity and Usability
+# Status: done
+# Dependencies: 20
+# Priority: high
+# Description: Revise all MCP tool descriptions to be clear, concise, and action-oriented, emphasizing when and why to use each tool with practical examples and real-world use cases that help users quickly understand tool capabilities.
+# Details:
+Implement comprehensive updates to all MCP tool descriptions across the codebase:
+
+```go
+// internal/tools/descriptions.go
+package tools
+
+// Tool description structure for consistency
+type ToolDescription struct {
+    Name           string
+    Summary        string // One-line action-oriented summary
+    When           string // When to use this tool
+    Why            string // Why this tool is valuable
+    Examples       []Example
+    UseCases       []UseCase
+    Prerequisites  []string
+    Output         string // What the tool returns
+}
+
+type Example struct {
+    Scenario    string
+    Command     string
+    Expected    string
+}
+
+type UseCase struct {
+    Title       string
+    Description string
+    Workflow    []string // Step-by-step workflow
+}
+
+// Example: PDF Server Info Tool
+var PDFServerInfoDesc = ToolDescription{
+    Name:    "pdf_server_info",
+    Summary: "Get real-time server status and PDF processing capabilities",
+    When:    "Before starting PDF operations or troubleshooting issues",
+    Why:     "Ensures server readiness and helps diagnose configuration problems",
+    Examples: []Example{
+        {
+            Scenario: "Check server health before bulk processing",
+            Command:  "pdf_server_info",
+            Expected: "Server status, available tools, memory usage",
+        },
+        {
+            Scenario: "Verify PDF directory configuration",
+            Command:  "pdf_server_info --check-dirs",
+            Expected: "List of configured directories and file counts",
+        },
+    },
+    UseCases: []UseCase{
+        {
+            Title: "Pre-flight Check for Automation",
+            Description: "Verify server is ready before automated workflows",
+            Workflow: []string{
+                "1. Call pdf_server_info to check status",
+                "2. Verify required tools are available",
+                "3. Check memory/CPU thresholds",
+                "4. Proceed with automation if healthy",
+            },
+        },
+    },
+    Prerequisites: []string{"PDF server must be running"},
+    Output: "JSON object with server status, capabilities, and metrics",
+}
+
+// Example: List PDFs Tool
+var ListPDFsDesc = ToolDescription{
+    Name:    "list_pdfs",
+    Summary: "Discover and filter PDF files across configured directories",
+    When:    "Need to find specific PDFs or get an overview of available documents",
+    Why:     "Quickly locate documents without manual directory browsing",
+    Examples: []Example{
+        {
+            Scenario: "Find all PDFs containing 'invoice' in the name",
+            Command:  "list_pdfs --filter 'invoice'",
+            Expected: "List of matching PDFs with paths and metadata",
+        },
+        {
+            Scenario: "Get PDFs modified in last 7 days",
+            Command:  "list_pdfs --modified-since '7d'",
+            Expected: "Recent PDFs with timestamps",
+        },
+    },
+    UseCases: []UseCase{
+        {
+            Title: "Batch Processing Preparation",
+            Description: "Identify PDFs for bulk operations",
+            Workflow: []string{
+                "1. Use list_pdfs with filters to find target files",
+                "2. Export results to processing queue",
+                "3. Iterate through list for batch operations",
+            },
+        },
+        {
+            Title: "Document Inventory Management",
+            Description: "Regular audits of PDF collections",
+            Workflow: []string{
+                "1. Schedule periodic list_pdfs calls",
+                "2. Compare results with previous inventory",
+                "3. Identify new, modified, or missing files",
+                "4. Generate inventory reports",
+            },
+        },
+    },
+    Prerequisites: []string{"Configured PDF directories in server"},
+    Output: "Array of PDF metadata objects with paths, sizes, dates",
+}
+
+// Template for consistent formatting
+const DescriptionTemplate = `
+## {{.Name}}
+
+**What it does:** {{.Summary}}
+
+**When to use:** {{.When}}
+
+**Why it's useful:** {{.Why}}
+
+### Examples
+
+{{range .Examples}}
+**{{.Scenario}}**
+\`\`\`
+{{.Command}}
+\`\`\`
+Expected output: {{.Expected}}
+
+{{end}}
+
+### Use Cases
+
+{{range .UseCases}}
+#### {{.Title}}
+{{.Description}}
+
+**Workflow:**
+{{range .Workflow}}
+{{.}}
+{{end}}
+
+{{end}}
+
+**Prerequisites:** {{join .Prerequisites ", "}}
+
+**Returns:** {{.Output}}
+`
+
+// Update all tool registration with new descriptions
+func RegisterTools() {
+    tools := map[string]ToolDescription{
+        "pdf_server_info": PDFServerInfoDesc,
+        "list_pdfs":       ListPDFsDesc,
+        "extract_text":    ExtractTextDesc,
+        "extract_images":  ExtractImagesDesc,
+        "get_metadata":    GetMetadataDesc,
+        "search_pdfs":     SearchPDFsDesc,
+        "merge_pdfs":      MergePDFsDesc,
+        "split_pdf":       SplitPDFDesc,
+        // ... all other tools
+    }
+    
+    // Generate documentation
+    for name, desc := range tools {
+        doc := GenerateDocumentation(desc)
+        SaveToolDoc(name, doc)
+    }
+}
+
+// MCP schema integration
+func UpdateMCPSchemas(tools map[string]ToolDescription) {
+    for name, desc := range tools {
+        schema := MCPToolSchema{
+            Name:        name,
+            Description: desc.Summary,
+            InputSchema: generateInputSchema(name),
+            Examples:    convertExamples(desc.Examples),
+        }
+        RegisterMCPTool(schema)
+    }
+}
+
+# Test Strategy:
+Comprehensive testing and validation strategy for updated tool descriptions:
+
+1. **Description Quality Tests**:
+   - Verify all descriptions follow action-oriented format (starts with verb)
+   - Check summary length is under 80 characters
+   - Ensure When/Why sections are present and meaningful
+   - Validate at least 2 examples per tool
+   - Confirm at least 1 detailed use case per tool
+
+2. **Consistency Validation**:
+   - Run linter to check all tools use ToolDescription structure
+   - Verify template rendering produces valid Markdown
+   - Check all prerequisites are accurate and testable
+   - Ensure output descriptions match actual tool responses
+
+3. **Example Testing**:
+   - Execute each example command programmatically
+   - Verify expected outputs match actual results
+   - Test examples cover common and edge cases
+   - Validate command syntax is correct
+
+4. **Use Case Validation**:
+   - Review workflows with actual users
+   - Test each workflow step is actionable
+   - Verify use cases address real user needs
+   - Check workflows are complete and logical
+
+5. **Documentation Generation**:
+   - Generate docs for all tools automatically
+   - Verify Markdown formatting is correct
+   - Test documentation site builds successfully
+   - Check cross-references between tools work
+
+6. **MCP Integration Tests**:
+   - Verify MCP schemas include new descriptions
+   - Test tool discovery shows updated information
+   - Check Claude/other assistants see new descriptions
+   - Validate schema validation passes
+
+7. **User Acceptance Testing**:
+   - A/B test old vs new descriptions with users
+   - Measure time to understand tool purpose
+   - Track successful tool usage after reading descriptions
+   - Collect feedback on clarity and usefulness
+
+8. **Automated Checks**:
+   ```go
+   func TestToolDescriptions(t *testing.T) {
+       for name, desc := range AllToolDescriptions {
+           // Check required fields
+           assert.NotEmpty(t, desc.Summary)
+           assert.NotEmpty(t, desc.When)
+           assert.NotEmpty(t, desc.Why)
+           
+           // Verify action-oriented
+           assert.Regexp(t, "^[A-Z][a-z]+ ", desc.Summary)
+           
+           // Check examples
+           assert.GreaterOrEqual(t, len(desc.Examples), 2)
+           
+           // Validate use cases
+           assert.GreaterOrEqual(t, len(desc.UseCases), 1)
+       }
+   }
+   ```

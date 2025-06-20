@@ -1,0 +1,254 @@
+# Task ID: 12
+# Title: Implement AcroForm Dictionary Parser
+# Status: done
+# Dependencies: 2, 11
+# Priority: high
+# Description: Build a specialized parser to extract and process the AcroForm dictionary from PDF catalog, handling the complete form field hierarchy including field inheritance and widget annotations according to PDF 1.7 section 12.7
+# Details:
+Implement comprehensive AcroForm dictionary parsing:
+
+```go
+// internal/pdf/forms/acroform_parser.go
+type AcroFormParser struct {
+    catalog    *PDFCatalog
+    resolver   ObjectResolver
+}
+
+type AcroForm struct {
+    Fields          []FieldDict    `json:"fields"`
+    NeedAppearances bool          `json:"needAppearances"`
+    SigFlags        int           `json:"sigFlags"`
+    CO              []ObjectRef   `json:"co,omitempty"`
+    DR              ResourceDict  `json:"dr,omitempty"`
+    DA              string        `json:"da,omitempty"`
+    Q               int           `json:"q,omitempty"`
+}
+
+func (p *AcroFormParser) ParseAcroForm() (*AcroForm, error) {
+    // 1. Get AcroForm entry from catalog
+    acroFormRef := p.catalog.Get("AcroForm")
+    if acroFormRef == nil {
+        return nil, ErrNoAcroForm
+    }
+    
+    // 2. Resolve indirect reference
+    acroFormDict := p.resolver.Resolve(acroFormRef)
+    
+    // 3. Parse AcroForm dictionary entries
+    form := &AcroForm{}
+    
+    // Parse Fields array (required)
+    if fields := acroFormDict.Get("Fields"); fields != nil {
+        form.Fields = p.parseFieldArray(fields)
+    }
+    
+    // Parse optional entries
+    form.NeedAppearances = acroFormDict.GetBool("NeedAppearances", false)
+    form.SigFlags = acroFormDict.GetInt("SigFlags", 0)
+    form.DA = acroFormDict.GetString("DA", "")
+    form.Q = acroFormDict.GetInt("Q", 0)
+    
+    return form, nil
+}
+
+// internal/pdf/forms/field_parser.go
+type FieldDict struct {
+    Type       string              `json:"type"`       // FT entry
+    Parent     *ObjectRef          `json:"parent,omitempty"`
+    Kids       []FieldDict         `json:"kids,omitempty"`
+    T          string              `json:"t"`          // Partial field name
+    TU         string              `json:"tu,omitempty"` // Alternate name
+    TM         string              `json:"tm,omitempty"` // Mapping name
+    Ff         uint32              `json:"ff,omitempty"` // Field flags
+    V          interface{}         `json:"v,omitempty"`  // Field value
+    DV         interface{}         `json:"dv,omitempty"` // Default value
+    AA         map[string]Action   `json:"aa,omitempty"` // Additional actions
+    Widgets    []WidgetAnnotation  `json:"widgets,omitempty"`
+}
+
+func (p *AcroFormParser) parseFieldArray(fieldsObj Object) []FieldDict {
+    var fields []FieldDict
+    
+    if array, ok := fieldsObj.(ArrayObject); ok {
+        for _, fieldRef := range array {
+            field := p.parseFieldDict(fieldRef)
+            if field != nil {
+                fields = append(fields, *field)
+            }
+        }
+    }
+    
+    return fields
+}
+
+func (p *AcroFormParser) parseFieldDict(fieldRef Object) *FieldDict {
+    // Resolve indirect reference
+    fieldObj := p.resolver.Resolve(fieldRef)
+    dict, ok := fieldObj.(DictObject)
+    if !ok {
+        return nil
+    }
+    
+    field := &FieldDict{}
+    
+    // Parse field type (may be inherited)
+    field.Type = p.getInheritedValue(dict, "FT").(string)
+    
+    // Parse field name components
+    field.T = dict.GetString("T", "")
+    field.TU = dict.GetString("TU", "")
+    field.TM = dict.GetString("TM", "")
+    
+    // Parse field flags (inheritable)
+    if ff := p.getInheritedValue(dict, "Ff"); ff != nil {
+        field.Ff = uint32(ff.(int))
+    }
+    
+    // Parse value and default value
+    field.V = p.parseFieldValue(dict.Get("V"), field.Type)
+    field.DV = p.parseFieldValue(dict.Get("DV"), field.Type)
+    
+    // Handle field hierarchy
+    if kids := dict.Get("Kids"); kids != nil {
+        field.Kids = p.parseFieldArray(kids)
+    } else {
+        // Terminal field - parse widget annotations
+        field.Widgets = p.parseWidgetAnnotations(dict)
+    }
+    
+    return field
+}
+
+// Handle field inheritance according to PDF spec
+func (p *AcroFormParser) getInheritedValue(field DictObject, key string) interface{} {
+    // Check current field
+    if val := field.Get(key); val != nil {
+        return val
+    }
+    
+    // Check parent hierarchy
+    parent := field.Get("Parent")
+    for parent != nil {
+        parentDict := p.resolver.Resolve(parent).(DictObject)
+        if val := parentDict.Get(key); val != nil {
+            return val
+        }
+        parent = parentDict.Get("Parent")
+    }
+    
+    return nil
+}
+
+// internal/pdf/forms/widget_parser.go
+type WidgetAnnotation struct {
+    Rect       Rectangle          `json:"rect"`
+    Page       int                `json:"page"`
+    AP         AppearanceDict     `json:"ap,omitempty"`
+    AS         string             `json:"as,omitempty"`
+    Border     []float64          `json:"border,omitempty"`
+    C          []float64          `json:"c,omitempty"`
+    StructParent int              `json:"structParent,omitempty"`
+}
+
+func (p *AcroFormParser) parseWidgetAnnotations(field DictObject) []WidgetAnnotation {
+    var widgets []WidgetAnnotation
+    
+    // Check if field is merged with widget
+    if rect := field.Get("Rect"); rect != nil {
+        widget := p.parseWidgetAnnotation(field)
+        widgets = append(widgets, widget)
+    }
+    
+    // Check for separate widget annotations
+    if annots := field.Get("Kids"); annots != nil {
+        // Parse child widgets
+        for _, annotRef := range annots.(ArrayObject) {
+            annotDict := p.resolver.Resolve(annotRef).(DictObject)
+            if annotDict.GetName("Subtype") == "Widget" {
+                widget := p.parseWidgetAnnotation(annotDict)
+                widgets = append(widgets, widget)
+            }
+        }
+    }
+    
+    return widgets
+}
+
+// Field value parsing based on field type
+func (p *AcroFormParser) parseFieldValue(val Object, fieldType string) interface{} {
+    if val == nil {
+        return nil
+    }
+    
+    switch fieldType {
+    case "Tx": // Text field
+        return p.resolver.ResolveString(val)
+    case "Ch": // Choice field
+        if array, ok := val.(ArrayObject); ok {
+            var options []string
+            for _, opt := range array {
+                options = append(options, p.resolver.ResolveString(opt))
+            }
+            return options
+        }
+        return p.resolver.ResolveString(val)
+    case "Btn": // Button field
+        if name, ok := val.(NameObject); ok {
+            return string(name)
+        }
+        return nil
+    default:
+        return val
+    }
+}
+```
+
+Key implementation considerations:
+1. Handle field inheritance properly - FT, Ff, V, DV can be inherited from ancestors
+2. Support merged fields (field dict contains widget properties) and separate widgets
+3. Parse all field types: text (Tx), button (Btn), choice (Ch), signature (Sig)
+4. Handle field naming hierarchy with fully qualified names
+5. Support field collections and calculation order (CO array)
+6. Parse default resources (DR) and default appearance (DA)
+
+# Test Strategy:
+Comprehensive testing for AcroForm dictionary parsing:
+
+1. **Basic AcroForm parsing tests**:
+   - Test with PDFs containing valid AcroForm dictionaries
+   - Verify correct parsing of all AcroForm entries (Fields, NeedAppearances, SigFlags, etc.)
+   - Test with missing optional entries
+   - Test with PDFs that have no forms (should return appropriate error)
+
+2. **Field hierarchy tests**:
+   - Create test PDFs with nested field hierarchies
+   - Verify field inheritance works correctly (FT, Ff, V, DV)
+   - Test fully qualified field name construction
+   - Test with deeply nested field trees (3+ levels)
+
+3. **Field type specific tests**:
+   - Text fields: single line, multiline, password, file select
+   - Button fields: push buttons, checkboxes, radio buttons
+   - Choice fields: list boxes, combo boxes, multi-select
+   - Signature fields with various states
+
+4. **Widget annotation tests**:
+   - Test merged field/widget dictionaries
+   - Test separate widget annotations in Kids array
+   - Verify correct page association for widgets
+   - Test appearance streams (AP dictionary)
+
+5. **Edge cases and error handling**:
+   - Circular references in field hierarchy
+   - Invalid field types
+   - Malformed field dictionaries
+   - Missing required entries
+   - Test with PDF 1.4 and 1.7 form variations
+
+6. **Integration tests**:
+   - Parse real-world PDF forms from Adobe, government forms, etc.
+   - Compare output with reference implementations
+   - Verify all field properties are correctly extracted
+   - Test performance with forms containing 100+ fields
+
+Test data should include example PDFs from PDF reference documentation and real-world forms with various complexity levels.

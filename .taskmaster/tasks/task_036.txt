@@ -1,0 +1,392 @@
+# Task ID: 36
+# Title: Implement Advanced Color Space Support
+# Status: pending
+# Dependencies: 2, 3, 34
+# Priority: medium
+# Description: Add support for CIE-based color spaces (CalGray, CalRGB, Lab), ICCBased color profiles, and special color spaces (Indexed, Pattern, Separation, DeviceN) for accurate color rendering and PDF 1.4 compliance.
+# Details:
+Implement a comprehensive color space handling system that supports all PDF color spaces according to PDF 1.4/1.7 specifications:
+
+```go
+// internal/pdf/color/colorspace.go
+package color
+
+import (
+    "encoding/binary"
+    "fmt"
+    "io"
+    "math"
+)
+
+type ColorSpace interface {
+    Name() string
+    NumComponents() int
+    ToRGB(components []float64) (r, g, b float64, err error)
+    DefaultColor() []float64
+}
+
+// Base color spaces
+type DeviceGray struct{}
+type DeviceRGB struct{}
+type DeviceCMYK struct{}
+
+// CIE-based color spaces
+type CalGray struct {
+    WhitePoint [3]float64 // Required: X, Y, Z of white point
+    BlackPoint [3]float64 // Optional: defaults to [0, 0, 0]
+    Gamma      float64    // Optional: defaults to 1.0
+}
+
+type CalRGB struct {
+    WhitePoint [3]float64   // Required
+    BlackPoint [3]float64   // Optional
+    Gamma      [3]float64   // Optional: defaults to [1, 1, 1]
+    Matrix     [9]float64   // Optional: linear transformation matrix
+}
+
+type Lab struct {
+    WhitePoint [3]float64 // Required
+    BlackPoint [3]float64 // Optional
+    Range      [4]float64 // Optional: [a_min, a_max, b_min, b_max]
+}
+
+// ICC-based color space
+type ICCBased struct {
+    Profile    []byte      // ICC profile data
+    Alternate  ColorSpace  // Fallback color space
+    N          int         // Number of components
+    metadata   ICCMetadata // Parsed ICC header
+}
+
+// Special color spaces
+type Indexed struct {
+    Base     ColorSpace
+    HiVal    int      // Maximum index value
+    Lookup   []byte   // Color lookup table
+}
+
+type Pattern struct {
+    UnderlyingSpace ColorSpace // Optional underlying color space
+}
+
+type Separation struct {
+    Name      string
+    Alternate ColorSpace
+    TintTransform Function // Maps tint value to alternate space
+}
+
+type DeviceN struct {
+    Names         []string
+    Alternate     ColorSpace
+    TintTransform Function
+    Attributes    map[string]interface{} // Optional attributes
+}
+
+// internal/pdf/color/parser.go
+type ColorSpaceParser struct {
+    resolver ObjectResolver
+    cache    map[string]ColorSpace
+}
+
+func (p *ColorSpaceParser) ParseColorSpace(obj Object) (ColorSpace, error) {
+    switch v := obj.(type) {
+    case Name:
+        return p.parseNamedColorSpace(string(v))
+    case Array:
+        return p.parseArrayColorSpace(v)
+    default:
+        return nil, fmt.Errorf("invalid color space object type: %T", obj)
+    }
+}
+
+func (p *ColorSpaceParser) parseArrayColorSpace(arr Array) (ColorSpace, error) {
+    if len(arr) == 0 {
+        return nil, errors.New("empty color space array")
+    }
+    
+    name, ok := arr[0].(Name)
+    if !ok {
+        return nil, errors.New("color space array must start with name")
+    }
+    
+    switch string(name) {
+    case "CalGray":
+        return p.parseCalGray(arr)
+    case "CalRGB":
+        return p.parseCalRGB(arr)
+    case "Lab":
+        return p.parseLab(arr)
+    case "ICCBased":
+        return p.parseICCBased(arr)
+    case "Indexed":
+        return p.parseIndexed(arr)
+    case "Pattern":
+        return p.parsePattern(arr)
+    case "Separation":
+        return p.parseSeparation(arr)
+    case "DeviceN":
+        return p.parseDeviceN(arr)
+    default:
+        return nil, fmt.Errorf("unknown color space: %s", name)
+    }
+}
+
+// internal/pdf/color/icc.go
+type ICCProfileParser struct {
+    data []byte
+}
+
+type ICCMetadata struct {
+    ProfileSize        uint32
+    PreferredCMM       string
+    Version            string
+    ProfileClass       string
+    ColorSpace         string
+    PCS                string // Profile Connection Space
+    CreationDate       time.Time
+    ProfileSignature   string
+    PrimaryPlatform    string
+    Flags              uint32
+    DeviceManufacturer string
+    DeviceModel        string
+    RenderingIntent    uint32
+}
+
+func (p *ICCProfileParser) Parse() (*ICCMetadata, error) {
+    if len(p.data) < 128 {
+        return nil, errors.New("ICC profile too small")
+    }
+    
+    // Parse ICC profile header (first 128 bytes)
+    meta := &ICCMetadata{}
+    meta.ProfileSize = binary.BigEndian.Uint32(p.data[0:4])
+    meta.PreferredCMM = string(p.data[4:8])
+    // ... parse remaining header fields
+    
+    return meta, nil
+}
+
+// internal/pdf/color/conversion.go
+func (cs *CalGray) ToRGB(components []float64) (r, g, b float64, err error) {
+    if len(components) != 1 {
+        return 0, 0, 0, fmt.Errorf("CalGray requires 1 component, got %d", len(components))
+    }
+    
+    gray := components[0]
+    
+    // Apply gamma correction
+    if cs.Gamma != 0 && cs.Gamma != 1.0 {
+        gray = math.Pow(gray, cs.Gamma)
+    }
+    
+    // Convert to XYZ using white point
+    X := gray * cs.WhitePoint[0]
+    Y := gray * cs.WhitePoint[1]
+    Z := gray * cs.WhitePoint[2]
+    
+    // Convert XYZ to RGB (sRGB matrix)
+    r = 3.2406*X - 1.5372*Y - 0.4986*Z
+    g = -0.9689*X + 1.8758*Y + 0.0415*Z
+    b = 0.0557*X - 0.2040*Y + 1.0570*Z
+    
+    // Clamp to [0, 1]
+    r = math.Max(0, math.Min(1, r))
+    g = math.Max(0, math.Min(1, g))
+    b = math.Max(0, math.Min(1, b))
+    
+    return r, g, b, nil
+}
+
+func (cs *Lab) ToRGB(components []float64) (r, g, b float64, err error) {
+    if len(components) != 3 {
+        return 0, 0, 0, fmt.Errorf("Lab requires 3 components, got %d", len(components))
+    }
+    
+    L := components[0]
+    a := components[1]
+    b_star := components[2]
+    
+    // Apply range if specified
+    if cs.Range[0] != 0 || cs.Range[1] != 0 {
+        a = cs.Range[0] + a*(cs.Range[1]-cs.Range[0])/100.0
+    }
+    if cs.Range[2] != 0 || cs.Range[3] != 0 {
+        b_star = cs.Range[2] + b_star*(cs.Range[3]-cs.Range[2])/100.0
+    }
+    
+    // Convert Lab to XYZ
+    fy := (L + 16) / 116
+    fx := a/500 + fy
+    fz := fy - b_star/200
+    
+    // Helper function for Lab to XYZ conversion
+    f := func(t float64) float64 {
+        if t > 0.206893 {
+            return t * t * t
+        }
+        return (t - 16.0/116.0) / 7.787
+    }
+    
+    X := cs.WhitePoint[0] * f(fx)
+    Y := cs.WhitePoint[1] * f(fy)
+    Z := cs.WhitePoint[2] * f(fz)
+    
+    // Convert XYZ to RGB
+    return xyzToRGB(X, Y, Z)
+}
+
+// internal/pdf/color/function.go
+type Function interface {
+    Evaluate(inputs []float64) ([]float64, error)
+    InputDimension() int
+    OutputDimension() int
+}
+
+type SampledFunction struct {
+    Domain     []float64
+    Range      []float64
+    Size       []int
+    BitsPerSample int
+    Samples    []byte
+    Encode     []float64
+    Decode     []float64
+}
+
+type ExponentialFunction struct {
+    Domain []float64
+    Range  []float64
+    C0     []float64
+    C1     []float64
+    N      float64
+}
+
+// internal/pdf/color/renderer.go
+type ColorRenderer struct {
+    colorSpaces map[string]ColorSpace
+    currentSpace ColorSpace
+}
+
+func (r *ColorRenderer) SetColorSpace(name string, cs ColorSpace) {
+    r.colorSpaces[name] = cs
+    r.currentSpace = cs
+}
+
+func (r *ColorRenderer) RenderColor(components []float64) (Color, error) {
+    if r.currentSpace == nil {
+        return Color{}, errors.New("no color space set")
+    }
+    
+    rgb, err := r.currentSpace.ToRGB(components)
+    if err != nil {
+        return Color{}, err
+    }
+    
+    return Color{
+        R: uint8(rgb[0] * 255),
+        G: uint8(rgb[1] * 255),
+        B: uint8(rgb[2] * 255),
+        A: 255,
+    }, nil
+}
+```
+
+Key implementation considerations:
+
+1. **Color Space Hierarchy**:
+   - Implement base interface for all color spaces
+   - Support device-dependent spaces (Gray, RGB, CMYK)
+   - Implement CIE-based spaces with proper white point handling
+   - Support ICC profiles with fallback mechanisms
+
+2. **ICC Profile Support**:
+   - Parse ICC profile headers to extract metadata
+   - Implement profile caching to avoid re-parsing
+   - Provide fallback to alternate color space when ICC fails
+   - Support both v2 and v4 ICC profiles
+
+3. **Special Color Spaces**:
+   - Indexed: Implement efficient lookup table access
+   - Pattern: Handle both colored and uncolored patterns
+   - Separation: Support spot colors with tint transforms
+   - DeviceN: Handle multiple spot colors simultaneously
+
+4. **Color Conversion**:
+   - Implement accurate XYZ to RGB conversion
+   - Support different illuminants (D50, D65)
+   - Handle gamma correction properly
+   - Implement clamping and rounding correctly
+
+5. **Function Support**:
+   - Implement Type 0 (sampled) functions for tint transforms
+   - Support Type 2 (exponential) functions
+   - Handle multi-dimensional interpolation for sampled functions
+
+6. **Performance Optimization**:
+   - Cache parsed color spaces to avoid re-parsing
+   - Pre-compute conversion matrices where possible
+   - Use lookup tables for indexed color spaces
+   - Implement lazy loading for ICC profiles
+
+# Test Strategy:
+Comprehensive testing strategy for advanced color space support:
+
+1. **Basic Color Space Tests**:
+   - Test DeviceGray, DeviceRGB, DeviceCMYK with known values
+   - Verify correct number of components for each space
+   - Test default color values for each space
+   - Validate color clamping to [0, 1] range
+
+2. **CIE-Based Color Space Tests**:
+   - Test CalGray with different gamma values (1.0, 1.8, 2.2)
+   - Verify CalRGB with identity and non-identity matrices
+   - Test Lab color space with standard D50 white point
+   - Validate Lab with custom ranges [-100, 100] for a* and b*
+   - Compare conversions against reference implementations
+
+3. **ICC Profile Tests**:
+   - Test parsing of valid ICC v2 and v4 profiles
+   - Verify header extraction (size, version, color space, etc.)
+   - Test with corrupted ICC data (should fall back to alternate)
+   - Validate profile caching works correctly
+   - Test with standard sRGB and Adobe RGB profiles
+
+4. **Indexed Color Space Tests**:
+   - Test with 256-color palette (8-bit indexed)
+   - Verify correct lookup for edge cases (index 0, max index)
+   - Test with different base color spaces (RGB, CMYK)
+   - Validate error handling for out-of-range indices
+
+5. **Separation Color Space Tests**:
+   - Test standard spot colors (PANTONE examples)
+   - Verify tint transform function evaluation
+   - Test with linear and non-linear tint functions
+   - Validate conversion to alternate color space
+
+6. **DeviceN Color Space Tests**:
+   - Test with multiple spot colors (2, 3, 4 components)
+   - Verify correct mapping to alternate space
+   - Test with "All" and "None" special colorant names
+   - Validate attributes dictionary parsing
+
+7. **Pattern Color Space Tests**:
+   - Test uncolored patterns (no underlying space)
+   - Test colored patterns with RGB underlying space
+   - Verify pattern color space validation
+
+8. **Function Tests**:
+   - Test Type 0 (sampled) functions with 1D and 2D inputs
+   - Verify interpolation accuracy for sampled functions
+   - Test Type 2 (exponential) functions with various N values
+   - Validate domain and range clamping
+
+9. **Integration Tests**:
+   - Test color space parsing from actual PDF objects
+   - Verify color rendering in content streams
+   - Test with PDF 1.4 transparency groups
+   - Validate against PDF test suite color examples
+
+10. **Performance Tests**:
+    - Benchmark color conversion performance
+    - Test caching effectiveness with repeated conversions
+    - Measure memory usage for large ICC profiles
+    - Verify no memory leaks in color space lifecycle

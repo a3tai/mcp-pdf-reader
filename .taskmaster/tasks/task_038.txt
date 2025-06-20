@@ -1,0 +1,350 @@
+# Task ID: 38
+# Title: Implement Composite Font Support (Type 0 Fonts)
+# Status: pending
+# Dependencies: 3, 4
+# Priority: medium
+# Description: Add support for composite fonts including Type 0 fonts, CIDFont dictionaries, CMap character mappings, and proper ToUnicode mapping for accurate text extraction from CJK and complex scripts. This is essential for international document support.
+# Details:
+Implement comprehensive composite font support for handling CJK and complex script documents according to PDF 1.4/1.7 specifications (Chapter 5.6):
+
+```go
+// internal/pdf/fonts/composite.go
+package fonts
+
+import (
+    "bytes"
+    "fmt"
+    "io"
+    "unicode/utf16"
+)
+
+type Type0Font struct {
+    BaseFont     string
+    Encoding     Encoding
+    DescendantFont CIDFont
+    ToUnicode    *CMap
+}
+
+type CIDFont struct {
+    Type         string // CIDFontType0 or CIDFontType2
+    BaseFont     string
+    CIDSystemInfo CIDSystemInfo
+    FontDescriptor *FontDescriptor
+    DW           float64 // Default width
+    W            []CIDWidth // Width array
+    DW2          [2]float64 // Default metrics for vertical writing
+    W2           []CIDMetrics // Vertical metrics array
+}
+
+type CIDSystemInfo struct {
+    Registry   string
+    Ordering   string
+    Supplement int
+}
+
+// CMap parsing and character mapping
+type CMap struct {
+    name         string
+    codeSpaceRanges []CodeSpaceRange
+    cidMappings  map[uint32]uint16 // Character code to CID
+    unicodeMappings map[uint32][]rune // Character code to Unicode
+    bfChars      map[uint32][]rune // Direct character mappings
+    bfRanges     []BFRange // Range mappings
+}
+
+type CodeSpaceRange struct {
+    Low  []byte
+    High []byte
+}
+
+type BFRange struct {
+    SrcLow  uint32
+    SrcHigh uint32
+    Dest    interface{} // Can be uint32 or []rune array
+}
+
+// Parse Type 0 font dictionary
+func ParseType0Font(dict map[string]interface{}, resolver ObjectResolver) (*Type0Font, error) {
+    font := &Type0Font{}
+    
+    // Extract BaseFont
+    if baseFont, ok := dict["BaseFont"].(string); ok {
+        font.BaseFont = baseFont
+    }
+    
+    // Parse Encoding (CMap name or stream)
+    if encoding := dict["Encoding"]; encoding != nil {
+        switch enc := encoding.(type) {
+        case string:
+            font.Encoding = &CMAPEncoding{Name: enc}
+        case *PDFStream:
+            cmap, err := ParseCMapStream(enc)
+            if err != nil {
+                return nil, fmt.Errorf("failed to parse CMap stream: %w", err)
+            }
+            font.Encoding = &CMAPEncoding{CMap: cmap}
+        }
+    }
+    
+    // Parse DescendantFonts array
+    if descFonts, ok := dict["DescendantFonts"].([]interface{}); ok && len(descFonts) > 0 {
+        if descDict, err := resolver.ResolveObject(descFonts[0]); err == nil {
+            cidFont, err := ParseCIDFont(descDict.(map[string]interface{}), resolver)
+            if err != nil {
+                return nil, fmt.Errorf("failed to parse CID font: %w", err)
+            }
+            font.DescendantFont = cidFont
+        }
+    }
+    
+    // Parse ToUnicode CMap if present
+    if toUnicode := dict["ToUnicode"]; toUnicode != nil {
+        if stream, err := resolver.ResolveStream(toUnicode); err == nil {
+            font.ToUnicode, _ = ParseCMapStream(stream)
+        }
+    }
+    
+    return font, nil
+}
+
+// CMap parser implementation
+func ParseCMapStream(stream *PDFStream) (*CMap, error) {
+    cmap := &CMap{
+        cidMappings: make(map[uint32]uint16),
+        unicodeMappings: make(map[uint32][]rune),
+        bfChars: make(map[uint32][]rune),
+    }
+    
+    data := stream.DecodedData()
+    parser := NewCMapParser(bytes.NewReader(data))
+    
+    for {
+        token, err := parser.NextToken()
+        if err == io.EOF {
+            break
+        }
+        if err != nil {
+            return nil, err
+        }
+        
+        switch token {
+        case "begincodespacerange":
+            count := parser.ReadInt()
+            for i := 0; i < count; i++ {
+                low := parser.ReadHexString()
+                high := parser.ReadHexString()
+                cmap.codeSpaceRanges = append(cmap.codeSpaceRanges, CodeSpaceRange{
+                    Low: low, High: high,
+                })
+            }
+            
+        case "beginbfchar":
+            count := parser.ReadInt()
+            for i := 0; i < count; i++ {
+                src := parser.ReadHexUint32()
+                dest := parser.ReadUnicodeString()
+                cmap.bfChars[src] = dest
+            }
+            
+        case "beginbfrange":
+            count := parser.ReadInt()
+            for i := 0; i < count; i++ {
+                srcLow := parser.ReadHexUint32()
+                srcHigh := parser.ReadHexUint32()
+                dest := parser.ReadDestination() // Can be hex string or array
+                
+                cmap.bfRanges = append(cmap.bfRanges, BFRange{
+                    SrcLow: srcLow,
+                    SrcHigh: srcHigh,
+                    Dest: dest,
+                })
+            }
+            
+        case "begincidchar":
+            count := parser.ReadInt()
+            for i := 0; i < count; i++ {
+                code := parser.ReadHexUint32()
+                cid := parser.ReadUint16()
+                cmap.cidMappings[code] = cid
+            }
+        }
+    }
+    
+    return cmap, nil
+}
+
+// Character decoding with CMap
+func (cmap *CMap) DecodeCharacter(code []byte) ([]rune, bool) {
+    codeValue := bytesToUint32(code)
+    
+    // Check direct mappings first
+    if unicode, ok := cmap.bfChars[codeValue]; ok {
+        return unicode, true
+    }
+    
+    // Check range mappings
+    for _, r := range cmap.bfRanges {
+        if codeValue >= r.SrcLow && codeValue <= r.SrcHigh {
+            offset := codeValue - r.SrcLow
+            
+            switch dest := r.Dest.(type) {
+            case uint32:
+                // Single value destination
+                return []rune{rune(dest + offset)}, true
+            case []rune:
+                // Array destination
+                if int(offset) < len(dest) {
+                    return []rune{dest[offset]}, true
+                }
+            }
+        }
+    }
+    
+    return nil, false
+}
+
+// CID to GID mapping for TrueType CIDFonts
+type CIDToGIDMap interface {
+    MapCIDToGID(cid uint16) uint16
+}
+
+type IdentityCIDToGIDMap struct{}
+
+func (m *IdentityCIDToGIDMap) MapCIDToGID(cid uint16) uint16 {
+    return cid
+}
+
+type StreamCIDToGIDMap struct {
+    data []byte
+}
+
+func (m *StreamCIDToGIDMap) MapCIDToGID(cid uint16) uint16 {
+    if int(cid)*2+1 < len(m.data) {
+        return uint16(m.data[cid*2])<<8 | uint16(m.data[cid*2+1])
+    }
+    return 0
+}
+
+// Width calculation for CID fonts
+func (f *CIDFont) GetWidth(cid uint16) float64 {
+    // Check W array for specific widths
+    for i := 0; i < len(f.W); i++ {
+        w := f.W[i]
+        if w.Type == CIDWidthRange && cid >= w.First && cid <= w.Last {
+            return w.Width
+        } else if w.Type == CIDWidthArray && cid >= w.First && int(cid-w.First) < len(w.Widths) {
+            return w.Widths[cid-w.First]
+        }
+    }
+    
+    // Return default width
+    return f.DW
+}
+
+// Integration with text extraction
+type CompositeTextExtractor struct {
+    font *Type0Font
+    scale float64
+}
+
+func (e *CompositeTextExtractor) ExtractText(data []byte) (string, []PositionedGlyph, error) {
+    var result strings.Builder
+    var glyphs []PositionedGlyph
+    
+    reader := bytes.NewReader(data)
+    
+    for reader.Len() > 0 {
+        // Read character code based on CMap code space
+        code := e.readCharacterCode(reader)
+        if code == nil {
+            break
+        }
+        
+        // Convert to Unicode using ToUnicode CMap
+        var text []rune
+        if e.font.ToUnicode != nil {
+            text, _ = e.font.ToUnicode.DecodeCharacter(code)
+        }
+        
+        // Fallback to predefined CMaps for CJK
+        if len(text) == 0 {
+            text = e.fallbackDecode(code)
+        }
+        
+        // Get CID for width calculation
+        cid := e.getCID(code)
+        width := e.font.DescendantFont.GetWidth(cid) * e.scale / 1000.0
+        
+        if len(text) > 0 {
+            result.WriteString(string(text))
+            glyphs = append(glyphs, PositionedGlyph{
+                Text: string(text),
+                Width: width,
+                CID: cid,
+            })
+        }
+    }
+    
+    return result.String(), glyphs, nil
+}
+
+// Predefined CMap support for standard CJK encodings
+var predefinedCMaps = map[string]func() *CMap{
+    "UniGB-UCS2-H": loadUniGBUCS2H,
+    "UniCNS-UCS2-H": loadUniCNSUCS2H,
+    "UniJIS-UCS2-H": loadUniJISUCS2H,
+    "UniKS-UCS2-H": loadUniKSUCS2H,
+    "Identity-H": loadIdentityH,
+    "Identity-V": loadIdentityV,
+}
+
+func loadPredefinedCMap(name string) (*CMap, error) {
+    if loader, ok := predefinedCMaps[name]; ok {
+        return loader(), nil
+    }
+    return nil, fmt.Errorf("unknown predefined CMap: %s", name)
+}
+
+# Test Strategy:
+Comprehensive testing strategy for composite font support:
+
+1. **Type 0 Font Parsing Tests**:
+   - Test parsing Type 0 font dictionaries with CIDFontType0 and CIDFontType2 descendants
+   - Verify correct extraction of BaseFont, Encoding, and DescendantFonts
+   - Test with embedded and external CMap references
+   - Validate CIDSystemInfo parsing (Registry-Ordering-Supplement)
+
+2. **CMap Parsing Tests**:
+   - Test parsing of ToUnicode CMaps with beginbfchar and beginbfrange mappings
+   - Verify correct parsing of codespacerange definitions
+   - Test with multi-byte character codes (2-byte, 3-byte)
+   - Validate handling of array destinations in bfrange mappings
+   - Test CID mappings (begincidchar, begincidrange)
+
+3. **Character Decoding Tests**:
+   - Test decoding of CJK characters using standard CMaps (UniGB-UCS2-H, UniJIS-UCS2-H, etc.)
+   - Verify correct Unicode mapping for common Chinese, Japanese, and Korean characters
+   - Test Identity-H and Identity-V encodings
+   - Validate fallback mechanisms when ToUnicode is missing
+
+4. **Width Calculation Tests**:
+   - Test CID width lookups with W array containing ranges and individual values
+   - Verify default width (DW) is used when CID not in W array
+   - Test vertical writing metrics (DW2, W2) for vertical text
+
+5. **Integration Tests**:
+   - Test with real CJK PDFs (Chinese GB18030, Japanese Shift-JIS, Korean KSC5601)
+   - Extract text from documents with mixed Latin and CJK content
+   - Verify correct positioning and spacing of CJK characters
+   - Test with PDFs from different sources (Adobe, MS Office, LibreOffice)
+
+6. **Edge Cases**:
+   - Test with malformed CMap data
+   - Handle missing DescendantFonts array
+   - Test with custom/embedded CMaps
+   - Verify handling of surrogate pairs for Unicode beyond BMP
+
+7. **Performance Tests**:
+   - Benchmark CMap parsing for large ToUnicode mappings (10,000+ entries)
+   - Test memory usage with complex CJK documents
+   - Verify efficient character code reading for variable-length codes

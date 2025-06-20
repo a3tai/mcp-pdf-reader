@@ -1,6 +1,7 @@
 package pdf
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,11 +27,14 @@ func TestServerInfo(t *testing.T) {
 	version := "1.0.0-test"
 
 	// Create PDF service
-	pdfService := NewService(maxFileSize)
+	pdfService, err := NewService(maxFileSize, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 
 	// Test server info functionality
 	req := PDFServerInfoRequest{}
-	result, err := pdfService.PDFServerInfo(req, serverName, version, tempDir)
+	result, err := pdfService.PDFServerInfo(context.Background(), req, serverName, version, tempDir)
 	if err != nil {
 		t.Fatalf("Server info failed: %v", err)
 	}
@@ -60,6 +64,16 @@ func TestServerInfo(t *testing.T) {
 		"pdf_stats_file",
 		"pdf_search_directory",
 		"pdf_stats_directory",
+		"pdf_server_info",
+		"pdf_get_page_info",
+		"pdf_get_metadata",
+		"pdf_extract_structured",
+		"pdf_extract_complete",
+		"pdf_extract_tables",
+		"pdf_extract_forms",
+		"pdf_extract_semantic",
+		"pdf_query_content",
+		"pdf_analyze_document",
 	}
 
 	if len(result.AvailableTools) != len(expectedTools) {
@@ -122,11 +136,14 @@ func TestServerInfoWithEmptyDirectory(t *testing.T) {
 	version := "1.0.0-test"
 
 	// Create PDF service
-	pdfService := NewService(maxFileSize)
+	pdfService, err := NewService(maxFileSize, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
 
 	// Test server info with empty directory
 	req := PDFServerInfoRequest{}
-	result, err := pdfService.PDFServerInfo(req, serverName, version, tempDir)
+	result, err := pdfService.PDFServerInfo(context.Background(), req, serverName, version, tempDir)
 	if err != nil {
 		t.Fatalf("Server info failed: %v", err)
 	}

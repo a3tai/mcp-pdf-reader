@@ -58,17 +58,29 @@ deps:
 	$(GOMOD) tidy
 	@echo "Dependencies installed"
 
-# Run tests
+# Run unit tests only
 .PHONY: test
 test:
-	@echo "Running tests..."
+	@echo "Running unit tests..."
+	$(GOTEST) -v -short ./...
+
+# Run integration tests
+.PHONY: test-integration
+test-integration:
+	@echo "Running integration tests..."
+	$(GOTEST) -v ./...
+
+# Run all tests (unit + integration)
+.PHONY: test-all
+test-all:
+	@echo "Running all tests (unit + integration)..."
 	$(GOTEST) -v ./...
 
 # Run tests with coverage
 .PHONY: test-coverage
 test-coverage:
 	@echo "Running tests with coverage..."
-	$(GOTEST) -v -coverprofile=coverage.out ./...
+	$(GOTEST) -v -short -coverprofile=coverage.out ./...
 	$(GOCMD) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
@@ -233,8 +245,10 @@ help:
 	@echo "  dev-setup     Set up development environment"
 	@echo ""
 	@echo "Testing:"
-	@echo "  test          Run tests"
-	@echo "  test-coverage Run tests with coverage report"
+	@echo "  test             Run unit tests only"
+	@echo "  test-integration Run integration tests"
+	@echo "  test-all         Run all tests (unit + integration)"
+	@echo "  test-coverage    Run unit tests with coverage report"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  fmt           Format code"
@@ -262,6 +276,8 @@ help:
 	@echo "  make run-server                       # Run in HTTP server mode with current directory"
 	@echo "  make run-custom DIR=/path/to/pdfs     # Run stdio mode with custom dir"
 	@echo "  make run-server-custom DIR=/path      # Run server mode with custom dir"
-	@echo "  make test                             # Run all tests"
-	@echo "  make test-coverage                    # Run tests with coverage report"
+	@echo "  make test                             # Run unit tests only"
+	@echo "  make test-integration                 # Run integration tests"
+	@echo "  make test-all                         # Run all tests"
+	@echo "  make test-coverage                    # Run unit tests with coverage report"
 	@echo "  make check-install                    # Check if binary is installed"

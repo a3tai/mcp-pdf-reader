@@ -1,0 +1,168 @@
+# Task ID: 13
+# Title: Create PDF Library Wrapper Interface
+# Status: done
+# Dependencies: 2, 11
+# Priority: high
+# Description: Design and implement an abstraction layer that provides a unified interface for PDF operations, allowing seamless switching between ledongthuc/pdf, pdfcpu, or custom implementations
+# Details:
+Create a flexible PDF library wrapper that abstracts common operations:
+
+```go
+// internal/pdf/wrapper/interface.go
+type PDFLibrary interface {
+    // Core operations
+    Open(reader io.Reader) (PDFDocument, error)
+    OpenFile(path string) (PDFDocument, error)
+    Validate() error
+    Close() error
+    
+    // Metadata operations
+    GetMetadata() (*Metadata, error)
+    GetPageCount() (int, error)
+    GetVersion() (string, error)
+    
+    // Content extraction
+    ExtractText(pageNum int) ([]TextElement, error)
+    ExtractImages(pageNum int) ([]ImageElement, error)
+    ExtractForms() ([]FormField, error)
+    
+    // Advanced operations
+    GetContentStream(pageNum int) ([]byte, error)
+    GetPageResources(pageNum int) (*Resources, error)
+    GetCatalog() (*Catalog, error)
+}
+
+// internal/pdf/wrapper/factory.go
+type LibraryType string
+
+const (
+    LibraryCustom    LibraryType = "custom"
+    LibraryPDFCPU    LibraryType = "pdfcpu"
+    LibraryLedongthuc LibraryType = "ledongthuc"
+)
+
+type PDFLibraryFactory struct {
+    defaultLib LibraryType
+}
+
+func (f *PDFLibraryFactory) Create(libType LibraryType) (PDFLibrary, error) {
+    switch libType {
+    case LibraryCustom:
+        return &CustomPDFLibrary{}, nil
+    case LibraryPDFCPU:
+        return &PDFCPULibrary{}, nil
+    case LibraryLedongthuc:
+        return &LedongthucLibrary{}, nil
+    default:
+        return nil, fmt.Errorf("unknown library type: %s", libType)
+    }
+}
+
+// internal/pdf/wrapper/custom.go
+type CustomPDFLibrary struct {
+    parser *PDFParser
+    doc    *PDFDocument
+}
+
+func (c *CustomPDFLibrary) Open(reader io.Reader) (PDFDocument, error) {
+    // Use existing custom parser implementation
+    c.parser = NewPDFParser(reader)
+    return c.parser.Parse()
+}
+
+// internal/pdf/wrapper/pdfcpu.go
+type PDFCPULibrary struct {
+    ctx *pdfcpu.Context
+}
+
+func (p *PDFCPULibrary) Open(reader io.Reader) (PDFDocument, error) {
+    // Wrap pdfcpu operations
+    config := pdfcpu.NewDefaultConfiguration()
+    ctx, err := pdfcpu.Read(reader, config)
+    if err != nil {
+        return nil, err
+    }
+    p.ctx = ctx
+    return p.wrapDocument(), nil
+}
+
+// internal/pdf/wrapper/ledongthuc.go
+type LedongthucLibrary struct {
+    pdf *ledongthuc.PDF
+}
+
+func (l *LedongthucLibrary) Open(reader io.Reader) (PDFDocument, error) {
+    // Wrap ledongthuc/pdf operations
+    pdf, err := ledongthuc.NewPDF(reader)
+    if err != nil {
+        return nil, err
+    }
+    l.pdf = pdf
+    return l.wrapDocument(), nil
+}
+
+// Common types for unified interface
+type PDFDocument interface {
+    GetPage(num int) (PDFPage, error)
+    GetPageCount() int
+    GetMetadata() map[string]string
+}
+
+type TextElement struct {
+    Text     string
+    Position Point
+    Font     FontInfo
+    Size     float64
+}
+
+// Configuration for library selection
+type WrapperConfig struct {
+    PreferredLibrary LibraryType
+    Fallbacks        []LibraryType
+    Features         []string // Required features for library selection
+}
+
+// Smart library selector based on document characteristics
+func SelectOptimalLibrary(doc io.Reader, config WrapperConfig) (PDFLibrary, error) {
+    // Analyze document to determine best library
+    // Check for specific features (forms, encryption, etc.)
+    // Return most suitable implementation
+}
+```
+
+Implement adapter pattern for each library to ensure consistent behavior and error handling across implementations.
+
+# Test Strategy:
+Comprehensive testing strategy for the wrapper interface:
+
+1. **Interface compliance tests**:
+   - Verify all implementations satisfy PDFLibrary interface
+   - Test method signatures and return types
+   - Ensure consistent error types across implementations
+
+2. **Functional equivalence tests**:
+   - Create test suite that runs against all three implementations
+   - Compare extracted text, images, and metadata
+   - Verify identical results for same PDF inputs
+   - Test with PDFs from docs/examples/
+
+3. **Performance benchmarks**:
+   - Benchmark each implementation for common operations
+   - Compare memory usage and processing speed
+   - Test with large PDFs (100+ pages)
+
+4. **Feature coverage matrix**:
+   - Test form extraction capabilities per library
+   - Verify image extraction support
+   - Check Unicode and encoding handling
+   - Test encrypted PDF support
+
+5. **Fallback mechanism tests**:
+   - Test automatic fallback when preferred library fails
+   - Verify graceful degradation of features
+   - Test library selection logic
+
+6. **Integration tests**:
+   - Test wrapper with existing extractors
+   - Verify MCP server works with all implementations
+   - Test hot-swapping of libraries at runtime

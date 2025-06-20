@@ -15,20 +15,203 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      release_id: ${{ steps.check_release.outputs.release_id }}
+      release_exists: ${{ steps.check_release.outputs.exists }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4.2.2
         with:
           fetch-depth: 0
 
-      - name: Get version from tag
+      - name: Get version info
         id: version
         run: |
           TAG=${GITHUB_REF#refs/tags/}
           VERSION=${TAG#v}
+
+          # Get previous tag for changelog
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${TAG}^ 2>/dev/null || echo "")
+
+          # Check if this is a pre-release
+          IS_PRERELEASE="false"
+          if [[ "$TAG" =~ -(alpha|beta|rc|pre|preview|dev) ]]; then
+            IS_PRERELEASE="true"
+          fi
+
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "previous_tag=${PREVIOUS_TAG}" >> $GITHUB_OUTPUT
+          echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
+
           echo "Release version: ${VERSION}"
+          echo "Previous tag: ${PREVIOUS_TAG}"
+          echo "Is prerelease: ${IS_PRERELEASE}"
+
+      - name: Check if release exists
+        id: check_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${{ steps.version.outputs.tag }}
+
+          # Check if release already exists
+          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/$TAG --jq '.id' 2>/dev/null || echo "")
+
+          if [ -n "$RELEASE_ID" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
+            echo "Found existing release with ID: $RELEASE_ID"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "release_id=" >> $GITHUB_OUTPUT
+            echo "No existing release found"
+          fi
+
+      - name: Delete existing release
+        if: steps.check_release.outputs.exists == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Deleting existing release..."
+          gh api -X DELETE repos/${{ github.repository }}/releases/${{ steps.check_release.outputs.release_id }}
+          echo "Existing release deleted successfully"
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          TAG=${{ steps.version.outputs.tag }}
+          PREVIOUS_TAG=${{ steps.version.outputs.previous_tag }}
+
+          # Create release notes file
+          cat > release_notes.md << 'EOF'
+          # MCP PDF Reader ${{ steps.version.outputs.tag }}
+
+          A robust Model Context Protocol (MCP) server for reading and analyzing PDF documents.
+
+          ## 🚀 Features
+
+          - **📄 PDF Processing**: Read, validate, and extract text from PDF documents
+          - **🔍 Smart Search**: Find PDF files with fuzzy search capabilities
+          - **📊 Statistics**: Get comprehensive directory and file statistics
+          - **🔄 Dual Mode Support**: stdio (MCP standard) and server (HTTP) modes
+          - **🎯 Editor Integration**: Works with Zed, Cursor, Claude Desktop, VS Code extensions, and more
+
+          ## 📦 Installation
+
+          ### Quick Install
+          ```bash
+          go install github.com/a3tai/mcp-pdf-reader/cmd/mcp-pdf-reader@${{ steps.version.outputs.tag }}
+          ```
+
+          ### Download Binaries
+          Download the appropriate binary for your platform from the assets below, then:
+
+          **Linux/macOS:**
+          ```bash
+          tar -xzf mcp-pdf-reader-${{ steps.version.outputs.version }}-linux-amd64.tar.gz
+          cd mcp-pdf-reader-${{ steps.version.outputs.version }}-linux-amd64
+          ./install.sh
+          ```
+
+          **Windows:**
+          1. Download and extract the zip file
+          2. Run `install.bat` as Administrator
+
+          ## 🎯 Usage
+
+          ```bash
+          # Basic usage (stdio mode for MCP clients)
+          mcp-pdf-reader -pdfdir=/path/to/pdfs
+
+          # Server mode for testing/debugging
+          mcp-pdf-reader -mode=server -pdfdir=./docs
+          ```
+
+          ## 📋 Supported Platforms
+
+          - **Linux**: amd64, arm64
+          - **macOS**: amd64 (Intel), arm64 (Apple Silicon)
+          - **Windows**: amd64
+
+          ## 🔧 What's Changed
+
+          EOF
+
+          # Generate changelog from commits
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "### 🎉 Initial Release" >> release_notes.md
+            echo "" >> release_notes.md
+            echo "This is the first release of MCP PDF Reader!" >> release_notes.md
+            echo "" >> release_notes.md
+            git log --pretty=format:"- %s (%h)" --reverse >> release_notes.md
+          else
+            echo "### Changes since $PREVIOUS_TAG" >> release_notes.md
+            echo "" >> release_notes.md
+
+            # Get commits between tags and categorize them
+            COMMITS=$(git log --pretty=format:"%s|||%h" --reverse ${PREVIOUS_TAG}..${TAG})
+
+            # Categorize commits
+            FEATURES=""
+            FIXES=""
+            DOCS=""
+            OTHER=""
+
+            while IFS='|||' read -r message hash; do
+              case "$message" in
+                feat:*|feature:*|add:*)
+                  FEATURES="$FEATURES- $message ($hash)\n"
+                  ;;
+                fix:*|bugfix:*|patch:*)
+                  FIXES="$FIXES- $message ($hash)\n"
+                  ;;
+                docs:*|doc:*|documentation:*)
+                  DOCS="$DOCS- $message ($hash)\n"
+                  ;;
+                *)
+                  OTHER="$OTHER- $message ($hash)\n"
+                  ;;
+              esac
+            done <<< "$COMMITS"
+
+            # Add sections if they have content
+            if [ -n "$FEATURES" ]; then
+              echo "#### 🚀 Features" >> release_notes.md
+              echo -e "$FEATURES" >> release_notes.md
+            fi
+
+            if [ -n "$FIXES" ]; then
+              echo "#### 🐛 Bug Fixes" >> release_notes.md
+              echo -e "$FIXES" >> release_notes.md
+            fi
+
+            if [ -n "$DOCS" ]; then
+              echo "#### 📚 Documentation" >> release_notes.md
+              echo -e "$DOCS" >> release_notes.md
+            fi
+
+            if [ -n "$OTHER" ]; then
+              echo "#### 🔧 Other Changes" >> release_notes.md
+              echo -e "$OTHER" >> release_notes.md
+            fi
+
+            # Add comparison link
+            echo "" >> release_notes.md
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${TAG}" >> release_notes.md
+          fi
+
+          echo "" >> release_notes.md
+          echo "---" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "**Install**: \`go install github.com/a3tai/mcp-pdf-reader/cmd/mcp-pdf-reader@${{ steps.version.outputs.tag }}\`" >> release_notes.md
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release_notes.md
 
   test:
     name: Run Tests
@@ -69,20 +252,25 @@ jobs:
           - goos: linux
             goarch: amd64
             suffix: ""
+            runner: ubuntu-latest
           - goos: linux
             goarch: arm64
             suffix: ""
+            runner: ubuntu-latest
           # macOS
           - goos: darwin
             goarch: amd64
             suffix: ""
+            runner: macos-latest
           - goos: darwin
             goarch: arm64
             suffix: ""
+            runner: macos-latest
           # Windows
           - goos: windows
             goarch: amd64
             suffix: ".exe"
+            runner: windows-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4.2.2
@@ -122,20 +310,134 @@ jobs:
           # Verify the binary was created
           ls -la "${BINARY_NAME}"
 
-          # Create checksums
+      # - name: Sign macOS binary
+      #   if: matrix.goos == 'darwin'
+      #   env:
+      #     APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+      #     APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      #     APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+      #   run: |
+      #     if [ -n "$APPLE_CERT_BASE64" ] && [ -n "$APPLE_CERT_PASSWORD" ]; then
+      #       echo "Setting up code signing..."
+      #       echo "$APPLE_CERT_BASE64" | base64 --decode > certificate.p12
+
+      #       # Create temporary keychain
+      #       security create-keychain -p actions temp.keychain
+      #       security default-keychain -s temp.keychain
+      #       security unlock-keychain -p actions temp.keychain
+
+      #       # Import certificate
+      #       security import certificate.p12 -k temp.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+      #       security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions temp.keychain
+
+      #       # Sign the binary
+      #       BINARY_NAME="mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
+      #       codesign --deep --force --verify --verbose \
+      #         --sign "$APPLE_DEVELOPER_ID" \
+      #         --options runtime \
+      #         "$BINARY_NAME"
+
+      #       # Verify signature
+      #       codesign --verify --verbose "$BINARY_NAME"
+
+      #       # Clean up
+      #       rm certificate.p12
+      #       security delete-keychain temp.keychain
+
+      #       echo "macOS binary signed successfully"
+      #     else
+      #       echo "Code signing certificates not available, skipping signing"
+      #     fi
+
+      # - name: Sign Windows binary
+      #   if: matrix.goos == 'windows'
+      #   env:
+      #     WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+      #     WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+      #   run: |
+      #     if ($env:WINDOWS_CERT_BASE64 -and $env:WINDOWS_CERT_PASSWORD) {
+      #       Write-Host "Setting up Windows code signing..."
+
+      #       # Decode certificate
+      #       $cert = [System.Convert]::FromBase64String($env:WINDOWS_CERT_BASE64)
+      #       [System.IO.File]::WriteAllBytes("certificate.pfx", $cert)
+
+      #       # Sign the binary
+      #       $binaryName = "mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
+      #       & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe" sign `
+      #         /f certificate.pfx `
+      #         /p $env:WINDOWS_CERT_PASSWORD `
+      #         /t http://timestamp.digicert.com `
+      #         /fd SHA256 `
+      #         /v $binaryName
+
+      #       # Verify signature
+      #       & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe" verify /pa $binaryName
+
+      #       # Clean up
+      #       Remove-Item certificate.pfx
+
+      #       Write-Host "Windows binary signed successfully"
+      #     } else {
+      #       Write-Host "Code signing certificates not available, skipping signing"
+      #     }
+
+      # - name: Sign Linux binary with GPG
+      #   if: matrix.goos == 'linux'
+      #   env:
+      #     GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      #     GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      #   run: |
+      #     if [ -n "$GPG_PRIVATE_KEY" ] && [ -n "$GPG_PASSPHRASE" ]; then
+      #       echo "Setting up GPG signing..."
+
+      #       # Import GPG key
+      #       echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+
+      #       # Sign the binary
+      #       BINARY_NAME="mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
+      #       echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback \
+      #         --detach-sign --armor "$BINARY_NAME"
+
+      #       # Verify signature exists
+      #       ls -la "${BINARY_NAME}.asc"
+
+      #       echo "Linux binary signed successfully"
+      #     else
+      #       echo "GPG signing key not available, skipping signing"
+      #     fi
+
+      - name: Create checksums
+        run: |
+          BINARY_NAME="mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
+
+          # Create SHA256 checksum
           if command -v sha256sum &> /dev/null; then
             sha256sum "${BINARY_NAME}" > "${BINARY_NAME}.sha256"
           else
             shasum -a 256 "${BINARY_NAME}" > "${BINARY_NAME}.sha256"
           fi
 
-      - name: Upload binary artifact
+          # Create SHA512 checksum
+          if command -v sha512sum &> /dev/null; then
+            sha512sum "${BINARY_NAME}" > "${BINARY_NAME}.sha512"
+          else
+            shasum -a 512 "${BINARY_NAME}" > "${BINARY_NAME}.sha512"
+          fi
+
+          echo "Checksums created:"
+          cat "${BINARY_NAME}.sha256"
+          cat "${BINARY_NAME}.sha512"
+
+      - name: Upload binary artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}
             mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}.sha256
+            mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}.sha512
+            mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}.asc
 
   package:
     name: Create Release Packages
@@ -145,28 +447,27 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4.2.2
 
-      - name: Download all artifacts
+      - name: Download all binary artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: binary-*
           path: ./artifacts
 
       - name: Create release packages
         run: |
           mkdir -p release-packages
+          VERSION="${{ needs.prepare.outputs.version }}"
 
           # Create packages for each platform
-          for dir in ./artifacts/*/; do
-            platform=$(basename "$dir")
+          for dir in ./artifacts/binary-*/; do
+            platform=$(basename "$dir" | sed 's/binary-//')
             echo "Creating package for ${platform}"
 
-            # Extract OS and ARCH from artifact name
-            os_arch=${platform#mcp-pdf-reader-}
-
             # Create directory structure
-            pkg_dir="mcp-pdf-reader-${{ needs.prepare.outputs.version }}-${os_arch}"
+            pkg_dir="mcp-pdf-reader-${VERSION}-${platform}"
             mkdir -p "${pkg_dir}"
 
-            # Copy binary and checksum
+            # Copy binary and checksums
             cp "${dir}"/* "${pkg_dir}/"
 
             # Copy documentation
@@ -174,7 +475,7 @@ jobs:
             cp LICENSE "${pkg_dir}/"
 
             # Create installation script for Unix systems
-            if [[ "${os_arch}" != *"windows"* ]]; then
+            if [[ "${platform}" != *"windows"* ]]; then
               cat > "${pkg_dir}/install.sh" << 'EOF'
           #!/bin/bash
           set -e
@@ -188,7 +489,7 @@ jobs:
           mkdir -p "${INSTALL_DIR}"
 
           # Find the binary (it will have the platform suffix)
-          BINARY_FILE=$(find . -name "mcp-pdf-reader-*" -type f ! -name "*.sha256" | head -1)
+          BINARY_FILE=$(find . -name "mcp-pdf-reader-*" -type f ! -name "*.sha*" ! -name "*.asc" | head -1)
 
           if [ -z "${BINARY_FILE}" ]; then
             echo "Error: Binary not found"
@@ -209,7 +510,7 @@ jobs:
             fi
 
             # Create Windows installation script
-            if [[ "${os_arch}" == *"windows"* ]]; then
+            if [[ "${platform}" == *"windows"* ]]; then
               cat > "${pkg_dir}/install.bat" << 'EOF'
           @echo off
           setlocal
@@ -237,7 +538,7 @@ jobs:
             fi
 
             # Create archive
-            if [[ "${os_arch}" == *"windows"* ]]; then
+            if [[ "${platform}" == *"windows"* ]]; then
               # Create zip for Windows
               cd "${pkg_dir}" && zip -r "../release-packages/${pkg_dir}.zip" . && cd ..
             else
@@ -269,6 +570,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4.2.2
 
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: .
+
       - name: Download release packages
         uses: actions/download-artifact@v4
         with:
@@ -278,90 +585,31 @@ jobs:
       - name: Download binary artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: binary-*
           path: ./artifacts
 
-      - name: Generate release notes
-        id: release_notes
-        run: |
-          cat > release_notes.md << EOF
-          # MCP PDF Reader ${{ needs.prepare.outputs.tag }}
-
-          A robust Model Context Protocol (MCP) server for reading and analyzing PDF documents.
-
-          ## 🚀 Features
-
-          - **📄 PDF Processing**: Read, validate, and extract text from PDF documents
-          - **🔍 Smart Search**: Find PDF files with fuzzy search capabilities
-          - **📊 Statistics**: Get comprehensive directory and file statistics
-          - **🔄 Dual Mode Support**: stdio (MCP standard) and server (HTTP) modes
-          - **🎯 Editor Integration**: Works with Zed, Cursor, Claude Desktop, VS Code extensions, and more
-
-          ## 📦 Installation
-
-          ### Quick Install
-          \`\`\`bash
-          go install github.com/a3tai/mcp-pdf-reader/cmd/mcp-pdf-reader@${{ needs.prepare.outputs.tag }}
-          \`\`\`
-
-          ### Download Binaries
-          Download the appropriate binary for your platform from the assets below, then:
-
-          **Linux/macOS:**
-          \`\`\`bash
-          tar -xzf mcp-pdf-reader-${{ needs.prepare.outputs.version }}-linux-amd64.tar.gz
-          cd mcp-pdf-reader-${{ needs.prepare.outputs.version }}-linux-amd64
-          ./install.sh
-          \`\`\`
-
-          **Windows:**
-          1. Download and extract the zip file
-          2. Run \`install.bat\` as Administrator
-
-          ## 🎯 Usage
-
-          \`\`\`bash
-          # Basic usage (stdio mode for MCP clients)
-          mcp-pdf-reader -pdfdir=/path/to/pdfs
-
-          # Server mode for testing/debugging
-          mcp-pdf-reader -mode=server -pdfdir=./docs
-          \`\`\`
-
-          ## 📋 Supported Platforms
-
-          - **Linux**: amd64, arm64
-          - **macOS**: amd64 (Intel), arm64 (Apple Silicon)
-          - **Windows**: amd64
-
-          ## 🔧 What's New
-
-          - Initial release of MCP PDF Reader
-          - Cross-platform binaries for all major platforms
-          - Comprehensive editor integration support
-          - Production-ready with extensive testing
-
-          ---
-
-          **Full Changelog**: https://github.com/a3tai/mcp-pdf-reader/commits/${{ needs.prepare.outputs.tag }}
-          EOF
-
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
-          name: MCP PDF Reader ${{ needs.prepare.outputs.tag }}
+          name: "MCP PDF Reader ${{ needs.prepare.outputs.tag }}"
           body_path: release_notes.md
           draft: false
-          prerelease: false
+          prerelease: ${{ needs.prepare.outputs.is_prerelease }}
           files: |
             ./release-packages/*
-            ./artifacts/*/*
+            ./artifacts/binary-*/*
           generate_release_notes: false
+          make_latest: ${{ needs.prepare.outputs.is_prerelease == 'false' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update latest release info
+      - name: Update release summary
         run: |
           echo "🎉 Release ${{ needs.prepare.outputs.tag }} created successfully!"
-          echo "📦 Download: https://github.com/a3tai/mcp-pdf-reader/releases/tag/${{ needs.prepare.outputs.tag }}"
-          echo "🚀 Install: go install github.com/a3tai/mcp-pdf-reader/cmd/mcp-pdf-reader@${{ needs.prepare.outputs.tag }}"
+          echo "📦 Download: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}"
+          echo "🚀 Install: \`go install github.com/${{ github.repository }}/cmd/mcp-pdf-reader@${{ needs.prepare.outputs.tag }}\`"
+
+          if [ "${{ needs.prepare.outputs.is_prerelease }}" = "true" ]; then
+            echo "⚠️  Note: This is a pre-release version"
+          fi

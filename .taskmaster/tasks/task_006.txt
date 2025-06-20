@@ -1,0 +1,39 @@
+# Task ID: 6
+# Title: Implement Image and Graphics Extraction
+# Status: done
+# Dependencies: 4
+# Priority: medium
+# Description: Extract embedded images, vector graphics, and other non-text content with positioning information and metadata
+# Details:
+Extract images and graphics from PDF:
+
+```go
+// internal/extractors/images.go
+type ImageExtractor struct {
+    decoder map[string]ImageDecoder
+}
+
+func (ie *ImageExtractor) ExtractImages(page *PDFPage) ([]ExtractedImage, error) {
+    // Find image XObjects
+    // Decode image data (JPEG, PNG, etc.)
+    // Calculate positioning
+    // Extract metadata
+}
+
+// pkg/models/image.go
+type ExtractedImage struct {
+    Page     int         `json:"page"`
+    Bounds   BoundingBox `json:"bounds"`
+    Format   string      `json:"format"`
+    Data     []byte      `json:"data,omitempty"`
+    DataURL  string      `json:"dataUrl"`
+    Metadata ImageMeta   `json:"metadata"`
+}
+
+// Handle inline images (BI/EI) and XObject images (Do)
+```
+
+Implement pdf_extract_images MCP tool.
+
+# Test Strategy:
+Test with PDFs containing various image formats (JPEG, PNG, TIFF). Verify correct positioning and data extraction. Test inline vs XObject images.

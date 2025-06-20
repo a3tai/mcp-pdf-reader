@@ -257,6 +257,9 @@ func TestConfigString(t *testing.T) {
 }
 
 func TestConfigValidateDirectoryCreation(t *testing.T) {
+	// Test that we no longer create directories automatically
+	// This allows for placeholder paths like ${workspaceRoot}
+
 	// Create a temporary parent directory
 	tempParent, err := os.MkdirTemp("", "pdf-mcp-parent-*")
 	if err != nil {
@@ -276,15 +279,15 @@ func TestConfigValidateDirectoryCreation(t *testing.T) {
 		MaxFileSize:  1024,
 	}
 
-	// Validate should create the directory
+	// Validate should NOT create the directory anymore
 	err = cfg.Validate()
 	if err != nil {
-		t.Errorf("Config.Validate() should create missing directory, got error: %v", err)
+		t.Errorf("Config.Validate() should not fail for non-existent directory, got error: %v", err)
 	}
 
-	// Check that directory was created
-	if _, err := os.Stat(nonExistentDir); os.IsNotExist(err) {
-		t.Errorf("Directory should have been created: %s", nonExistentDir)
+	// Check that directory was NOT created
+	if _, err := os.Stat(nonExistentDir); !os.IsNotExist(err) {
+		t.Errorf("Directory should NOT have been created: %s", nonExistentDir)
 	}
 }
 

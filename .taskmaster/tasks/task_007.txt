@@ -1,0 +1,70 @@
+# Task ID: 7
+# Title: Build Form Field Detection and Extraction
+# Status: done
+# Dependencies: 4
+# Priority: medium
+# Description: Detect and extract interactive form fields including text fields, checkboxes, radio buttons, and dropdowns with their values and properties
+# Details:
+Extract form fields from AcroForms:
+
+```go
+// internal/extractors/forms.go
+type FormExtractor struct {
+    catalog *PDFCatalog
+}
+
+func (fe *FormExtractor) ExtractForms(doc *PDFDocument) ([]FormField, error) {
+    // Get AcroForm dictionary
+    // Parse field tree
+    // Extract field properties
+    // Get current values
+}
+
+// pkg/models/form.go
+type FormField struct {
+    Name       string      `json:"name"`
+    Type       string      `json:"type"` // text, checkbox, radio, select
+    Value      interface{} `json:"value"`
+    Options    []string    `json:"options,omitempty"`
+    Required   bool        `json:"required"`
+    Bounds     BoundingBox `json:"bounds"`
+    Validation Validation  `json:"validation,omitempty"`
+}
+```
+
+Implement pdf_extract_forms MCP tool.
+
+# Test Strategy:
+Test with fillable PDF forms, both empty and filled. Verify field type detection, value extraction, and validation rules. Test nested field hierarchies.
+
+# Subtasks:
+## 1. Implement AcroForm Dictionary Parser [done]
+### Dependencies: None
+### Description: Create functionality to locate and parse the AcroForm dictionary from the PDF catalog, including handling of field tree structures and inheritance
+### Details:
+Implement methods to: 1) Locate the AcroForm entry in the PDF catalog dictionary, 2) Parse the Fields array to build the field tree hierarchy, 3) Handle field inheritance where child fields inherit properties from parent fields, 4) Extract default appearance settings and form-level properties like NeedAppearances flag
+
+## 2. Build Field Type Detection and Property Extraction [done]
+### Dependencies: 7.1
+### Description: Implement logic to identify field types (text, checkbox, radio, dropdown) and extract their specific properties including flags, default values, and appearance characteristics
+### Details:
+Create type detection based on FT (Field Type) entry: 1) Tx for text fields, 2) Btn for buttons (checkboxes/radio), 3) Ch for choice fields (dropdowns/lists). Extract field flags to determine multiline, password, file select properties. Parse field dictionaries for properties like MaxLen, default value (DV), current value (V), and field name (T)
+
+## 3. Implement Field Value and Options Extraction [done]
+### Dependencies: 7.2
+### Description: Extract current values from form fields and parse options for choice fields (dropdowns, lists) including export values and display text
+### Details:
+Parse V (value) entries handling different data types: strings for text fields, names for checkboxes/radio buttons, strings or arrays for choice fields. For choice fields, parse Opt array to extract available options as pairs of export values and display text. Handle special cases like multiple selection in list boxes
+
+## 4. Extract Field Positioning and Validation Rules [done]
+### Dependencies: 7.2
+### Description: Parse field appearance rectangles for positioning information and extract validation rules including format, range, and custom JavaScript validation
+### Details:
+Extract Rect array from field or widget annotation to determine field bounds on page. Parse validation dictionary (V) for format (AFNumber_Format, AFDate_Format), keystroke validation, and range checks. Extract JavaScript actions from AA (additional actions) dictionary for custom validation. Map page coordinates to consistent coordinate system
+
+## 5. Implement pdf_extract_forms MCP Tool [done]
+### Dependencies: 7.1, 7.2, 7.3, 7.4
+### Description: Create the MCP tool interface that orchestrates the form extraction process and returns structured form field data in the specified JSON format
+### Details:
+Implement the pdf_extract_forms function that: 1) Accepts PDF document input, 2) Calls FormExtractor.ExtractForms to process the document, 3) Transforms extracted data into the FormField model structure, 4) Handles errors gracefully with appropriate error messages, 5) Returns JSON response with array of form fields including all properties, bounds, and validation rules
+

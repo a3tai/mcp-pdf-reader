@@ -1,0 +1,309 @@
+# Task ID: 35
+# Title: Implement PDF Encryption and Security Handler
+# Status: done
+# Dependencies: 2, 3, 34
+# Priority: high
+# Description: Add support for the Standard Security Handler with password validation, RC4/AES decryption, and permission checking. This is required for reading encrypted PDF documents and PDF 1.4 compliance.
+# Details:
+Implement a comprehensive PDF encryption and security handling system that supports the Standard Security Handler (PDF 1.4/1.7 section 7.6):
+
+```go
+// internal/pdf/security/handler.go
+package security
+
+import (
+    "crypto/aes"
+    "crypto/cipher"
+    "crypto/md5"
+    "crypto/rc4"
+    "crypto/sha256"
+    "errors"
+)
+
+type SecurityHandler interface {
+    Authenticate(password []byte) error
+    DecryptObject(objNum, genNum int, data []byte) ([]byte, error)
+    GetPermissions() Permissions
+    IsEncrypted() bool
+}
+
+type StandardSecurityHandler struct {
+    encryptDict    *EncryptionDictionary
+    encryptionKey  []byte
+    authenticated  bool
+    permissions    uint32
+    revision       int
+    keyLength      int
+}
+
+type EncryptionDictionary struct {
+    Filter       string  // Standard
+    SubFilter    string  // Optional
+    V            int     // Version (1-5)
+    Length       int     // Key length in bits
+    R            int     // Revision (2-6)
+    O            []byte  // Owner password hash
+    U            []byte  // User password hash
+    OE           []byte  // Owner encryption key (R=6)
+    UE           []byte  // User encryption key (R=6)
+    P            int32   // Permissions
+    EncryptMetadata bool // Whether to encrypt metadata
+    StmF         string  // Stream filter
+    StrF         string  // String filter
+    CF           map[string]CryptFilter // Crypt filters
+}
+
+// internal/pdf/security/permissions.go
+type Permissions struct {
+    Print            bool // Bit 3
+    Modify           bool // Bit 4
+    Copy             bool // Bit 5
+    Annotate         bool // Bit 6
+    FillForms        bool // Bit 9
+    Extract          bool // Bit 10
+    Assemble         bool // Bit 11
+    PrintHighQuality bool // Bit 12
+}
+
+func (p Permissions) FromInt32(perms int32) Permissions {
+    return Permissions{
+        Print:            (perms & 0x04) != 0,
+        Modify:           (perms & 0x08) != 0,
+        Copy:             (perms & 0x10) != 0,
+        Annotate:         (perms & 0x20) != 0,
+        FillForms:        (perms & 0x200) != 0,
+        Extract:          (perms & 0x400) != 0,
+        Assemble:         (perms & 0x800) != 0,
+        PrintHighQuality: (perms & 0x1000) != 0,
+    }
+}
+
+// internal/pdf/security/algorithms.go
+func (h *StandardSecurityHandler) computeEncryptionKey(password []byte) []byte {
+    switch h.revision {
+    case 2, 3, 4:
+        return h.computeRC4Key(password)
+    case 5, 6:
+        return h.computeAESKey(password)
+    default:
+        return nil
+    }
+}
+
+func (h *StandardSecurityHandler) computeRC4Key(password []byte) []byte {
+    // Algorithm 2 from PDF spec
+    padded := h.padPassword(password)
+    hash := md5.New()
+    hash.Write(padded)
+    hash.Write(h.encryptDict.O)
+    hash.Write(intToBytes(h.encryptDict.P))
+    hash.Write(h.fileID)
+    
+    if h.revision >= 4 && !h.encryptDict.EncryptMetadata {
+        hash.Write([]byte{0xff, 0xff, 0xff, 0xff})
+    }
+    
+    digest := hash.Sum(nil)
+    
+    // For revision 3 or greater, do additional processing
+    if h.revision >= 3 {
+        for i := 0; i < 50; i++ {
+            hash.Reset()
+            hash.Write(digest[:h.keyLength/8])
+            digest = hash.Sum(nil)
+        }
+    }
+    
+    return digest[:h.keyLength/8]
+}
+
+// internal/pdf/security/decryption.go
+func (h *StandardSecurityHandler) DecryptObject(objNum, genNum int, data []byte) ([]byte, error) {
+    if !h.authenticated {
+        return nil, errors.New("not authenticated")
+    }
+    
+    // Compute object-specific key
+    objKey := h.computeObjectKey(objNum, genNum)
+    
+    switch h.encryptDict.V {
+    case 1, 2: // RC4
+        return h.decryptRC4(objKey, data)
+    case 4, 5: // AES
+        return h.decryptAES(objKey, data)
+    default:
+        return nil, fmt.Errorf("unsupported encryption version: %d", h.encryptDict.V)
+    }
+}
+
+func (h *StandardSecurityHandler) decryptRC4(key, data []byte) ([]byte, error) {
+    cipher, err := rc4.NewCipher(key)
+    if err != nil {
+        return nil, err
+    }
+    
+    decrypted := make([]byte, len(data))
+    cipher.XORKeyStream(decrypted, data)
+    return decrypted, nil
+}
+
+func (h *StandardSecurityHandler) decryptAES(key, data []byte) ([]byte, error) {
+    if len(data) < aes.BlockSize {
+        return nil, errors.New("ciphertext too short")
+    }
+    
+    block, err := aes.NewCipher(key)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Extract IV (first 16 bytes)
+    iv := data[:aes.BlockSize]
+    ciphertext := data[aes.BlockSize:]
+    
+    mode := cipher.NewCBCDecrypter(block, iv)
+    decrypted := make([]byte, len(ciphertext))
+    mode.CryptBlocks(decrypted, ciphertext)
+    
+    // Remove PKCS7 padding
+    return removePKCS7Padding(decrypted)
+}
+
+// internal/pdf/security/parser.go
+type SecurityParser struct {
+    resolver ObjectResolver
+}
+
+func (p *SecurityParser) ParseEncryptDict(dict map[string]Object) (*EncryptionDictionary, error) {
+    enc := &EncryptionDictionary{
+        EncryptMetadata: true, // Default
+    }
+    
+    // Parse required fields
+    if filter, ok := dict["Filter"].(Name); ok {
+        enc.Filter = string(filter)
+    } else {
+        return nil, errors.New("missing Filter in encryption dictionary")
+    }
+    
+    if v, ok := dict["V"].(Integer); ok {
+        enc.V = int(v)
+    } else {
+        return nil, errors.New("missing V in encryption dictionary")
+    }
+    
+    // Parse algorithm-specific fields
+    if enc.V >= 2 {
+        if length, ok := dict["Length"].(Integer); ok {
+            enc.Length = int(length)
+        } else {
+            enc.Length = 40 // Default for V=1
+        }
+    }
+    
+    // Parse password hashes
+    if o, ok := dict["O"].(String); ok {
+        enc.O = []byte(o)
+    }
+    if u, ok := dict["U"].(String); ok {
+        enc.U = []byte(u)
+    }
+    
+    // Parse permissions
+    if p, ok := dict["P"].(Integer); ok {
+        enc.P = int32(p)
+    }
+    
+    return enc, nil
+}
+
+// Integration with main parser
+// internal/pdf/parser.go (extension)
+type PDFParser struct {
+    // ... existing fields ...
+    security SecurityHandler
+}
+
+func (p *PDFParser) checkEncryption() error {
+    if encryptRef, ok := p.trailer["Encrypt"]; ok {
+        // Resolve encryption dictionary
+        encryptDict := p.resolveObject(encryptRef)
+        
+        // Parse encryption dictionary
+        parser := &SecurityParser{resolver: p}
+        encDict, err := parser.ParseEncryptDict(encryptDict)
+        if err != nil {
+            return err
+        }
+        
+        // Create appropriate security handler
+        switch encDict.Filter {
+        case "Standard":
+            p.security = NewStandardSecurityHandler(encDict, p.fileID)
+        default:
+            return fmt.Errorf("unsupported security handler: %s", encDict.Filter)
+        }
+    }
+    
+    return nil
+}
+
+// Modify object reading to handle decryption
+func (p *PDFParser) readObject(ref ObjectRef) (Object, error) {
+    // ... existing object reading code ...
+    
+    if p.security != nil && p.security.IsEncrypted() {
+        // Decrypt strings and streams
+        obj = p.decryptObject(ref.ObjNum, ref.GenNum, obj)
+    }
+    
+    return obj, nil
+}
+
+# Test Strategy:
+Comprehensive testing strategy for PDF encryption and security handler:
+
+1. **Password validation tests**:
+   - Test with correct user and owner passwords
+   - Test with incorrect passwords (should fail authentication)
+   - Test with empty password (for PDFs with no user password)
+   - Test password padding algorithm for passwords < 32 bytes
+   - Test with Unicode passwords (UTF-8 encoding)
+
+2. **Encryption algorithm tests**:
+   - Test RC4 decryption (40-bit and 128-bit keys) for V=1,2
+   - Test AES-128 decryption for V=4
+   - Test AES-256 decryption for V=5
+   - Verify correct IV extraction for AES
+   - Test PKCS7 padding removal
+   - Test object-specific key generation
+
+3. **Permission checking tests**:
+   - Test all permission bits (print, modify, copy, etc.)
+   - Verify permission enforcement based on P value
+   - Test with various permission combinations
+   - Ensure permissions are correctly parsed from negative int32 values
+
+4. **Integration tests with encrypted PDFs**:
+   - Test with PDF 1.4 encrypted documents (40-bit RC4)
+   - Test with PDF 1.6 encrypted documents (128-bit AES)
+   - Test with PDF 1.7 encrypted documents (256-bit AES)
+   - Verify correct decryption of strings, streams, and metadata
+   - Test with PDFs that don't encrypt metadata
+
+5. **Edge cases and error handling**:
+   - Test with malformed encryption dictionaries
+   - Test with unsupported encryption versions
+   - Test with missing required fields
+   - Test with corrupted encrypted data
+   - Verify proper error messages for each failure case
+
+6. **Performance tests**:
+   - Benchmark decryption of large encrypted PDFs
+   - Measure overhead of decryption vs unencrypted parsing
+   - Test memory usage with streaming decryption
+
+7. **Compatibility tests**:
+   - Test with PDFs encrypted by various tools (Adobe Acrobat, pdfcpu, etc.)
+   - Verify interoperability with different encryption implementations
+   - Test incremental updates on encrypted PDFs

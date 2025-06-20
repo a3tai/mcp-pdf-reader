@@ -1,0 +1,430 @@
+# Task ID: 14
+# Title: Implement pdfcpu Backend for PDF Wrapper
+# Status: done
+# Dependencies: 11, 12, 13
+# Priority: high
+# Description: Create a pdfcpu-based implementation of the PDFLibrary interface that provides robust AcroForm extraction capabilities with proper field type detection, value extraction, and property handling according to PDF specifications
+# Details:
+Implement a complete pdfcpu backend for the PDF wrapper interface with focus on AcroForm functionality:
+
+```go
+// internal/pdf/wrapper/pdfcpu_backend.go
+package wrapper
+
+import (
+    "github.com/pdfcpu/pdfcpu/pkg/api"
+    "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
+    "github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
+)
+
+type PDFCPUBackend struct {
+    ctx      *model.Context
+    reader   io.Reader
+    filePath string
+}
+
+func NewPDFCPUBackend() *PDFCPUBackend {
+    return &PDFCPUBackend{}
+}
+
+func (p *PDFCPUBackend) Open(reader io.Reader) (PDFDocument, error) {
+    // Read PDF into memory
+    data, err := io.ReadAll(reader)
+    if err != nil {
+        return nil, fmt.Errorf("failed to read PDF: %w", err)
+    }
+    
+    // Parse with pdfcpu
+    ctx, err := api.ReadContext(bytes.NewReader(data), pdfcpu.NewDefaultConfiguration())
+    if err != nil {
+        return nil, fmt.Errorf("pdfcpu parse error: %w", err)
+    }
+    
+    p.ctx = ctx
+    p.reader = bytes.NewReader(data)
+    return p, nil
+}
+
+// Implement AcroForm extraction with full field support
+func (p *PDFCPUBackend) ExtractFormFields() ([]FormField, error) {
+    if p.ctx.AcroForm == nil {
+        return []FormField{}, nil
+    }
+    
+    fields := []FormField{}
+    
+    // Process field tree recursively
+    for _, fieldRef := range p.ctx.AcroForm.Fields {
+        field, err := p.processFieldTree(fieldRef)
+        if err != nil {
+            continue // Log error but continue processing
+        }
+        fields = append(fields, field...)
+    }
+    
+    return fields, nil
+}
+
+func (p *PDFCPUBackend) processFieldTree(fieldRef model.Object) ([]FormField, error) {
+    fieldDict, err := p.ctx.DereferenceDict(fieldRef)
+    if err != nil {
+        return nil, err
+    }
+    
+    fields := []FormField{}
+    
+    // Check if this is a terminal field or intermediate node
+    if kids := fieldDict.ArrayEntry("Kids"); kids != nil {
+        // Process children
+        for _, kidRef := range kids {
+            childFields, err := p.processFieldTree(kidRef)
+            if err != nil {
+                continue
+            }
+            fields = append(fields, childFields...)
+        }
+    } else {
+        // Terminal field - extract properties
+        field, err := p.extractFieldProperties(fieldDict)
+        if err != nil {
+            return nil, err
+        }
+        fields = append(fields, *field)
+    }
+    
+    return fields, nil
+}
+
+func (p *PDFCPUBackend) extractFieldProperties(dict model.Dict) (*FormField, error) {
+    field := &FormField{
+        Properties: make(map[string]interface{}),
+    }
+    
+    // Extract field name (handle inheritance)
+    field.Name = p.getInheritedFieldName(dict)
+    
+    // Determine field type
+    ft := dict.NameEntry("FT")
+    if ft == nil {
+        ft = p.getInheritedEntry(dict, "FT")
+    }
+    
+    switch ft.String() {
+    case "Tx":
+        field.Type = "text"
+        field.Properties["multiline"] = dict.BooleanEntry("Ff")&4096 != 0
+        field.Properties["password"] = dict.BooleanEntry("Ff")&8192 != 0
+        field.Properties["maxLength"] = dict.IntEntry("MaxLen")
+    case "Btn":
+        flags := dict.IntEntry("Ff")
+        if flags&65536 != 0 { // Pushbutton
+            field.Type = "button"
+        } else if flags&32768 != 0 { // Radio
+            field.Type = "radio"
+        } else { // Checkbox
+            field.Type = "checkbox"
+        }
+    case "Ch":
+        flags := dict.IntEntry("Ff")
+        if flags&131072 != 0 { // Combo
+            field.Type = "combobox"
+        } else {
+            field.Type = "listbox"
+        }
+        field.Properties["multiSelect"] = flags&2097152 != 0
+        
+        // Extract options
+        if opt := dict.ArrayEntry("Opt"); opt != nil {
+            field.Options = p.extractOptions(opt)
+        }
+    case "Sig":
+        field.Type = "signature"
+    }
+    
+    // Extract value
+    field.Value = p.extractFieldValue(dict, field.Type)
+    
+    // Extract common properties
+    field.Properties["readOnly"] = dict.IntEntry("Ff")&1 != 0
+    field.Properties["required"] = dict.IntEntry("Ff")&2 != 0
+    field.Properties["noExport"] = dict.IntEntry("Ff")&4 != 0
+    
+    // Extract appearance and position
+    if widgets := p.getWidgetAnnotations(dict); len(widgets) > 0 {
+        // Use first widget for position
+        widget := widgets[0]
+        if rect := widget.ArrayEntry("Rect"); rect != nil && len(rect) == 4 {
+            field.Bounds = &BoundingBox{
+                X1: rect[0].(model.Float),
+                Y1: rect[1].(model.Float),
+                X2: rect[2].(model.Float),
+                Y2: rect[3].(model.Float),
+            }
+        }
+    }
+    
+    // Extract default value
+    if dv := dict.Entry("DV"); dv != nil {
+        field.DefaultValue = p.objectToValue(dv)
+    }
+    
+    // Extract tooltip/alternate text
+    if tu := dict.StringEntry("TU"); tu != nil {
+        field.Properties["tooltip"] = *tu
+    }
+    
+    return field, nil
+}
+
+func (p *PDFCPUBackend) extractFieldValue(dict model.Dict, fieldType string) interface{} {
+    v := dict.Entry("V")
+    if v == nil {
+        return nil
+    }
+    
+    switch fieldType {
+    case "checkbox":
+        // Check for /Yes or checked state
+        if name, ok := v.(model.Name); ok {
+            return name.String() == "Yes"
+        }
+    case "radio":
+        // Return the selected option name
+        if name, ok := v.(model.Name); ok {
+            return name.String()
+        }
+    case "text", "combobox":
+        // Return string value
+        if str := dict.StringEntry("V"); str != nil {
+            return *str
+        }
+    case "listbox":
+        // Can be single or multiple values
+        if arr, ok := v.(model.Array); ok {
+            values := []string{}
+            for _, item := range arr {
+                if str, ok := item.(model.StringLiteral); ok {
+                    values = append(values, str.Value())
+                }
+            }
+            return values
+        } else if str := dict.StringEntry("V"); str != nil {
+            return []string{*str}
+        }
+    }
+    
+    return p.objectToValue(v)
+}
+
+// Helper to convert PDF objects to Go values
+func (p *PDFCPUBackend) objectToValue(obj model.Object) interface{} {
+    switch v := obj.(type) {
+    case model.StringLiteral:
+        return v.Value()
+    case model.Name:
+        return v.String()
+    case model.Integer:
+        return int(v)
+    case model.Float:
+        return float64(v)
+    case model.Boolean:
+        return bool(v)
+    case model.Array:
+        arr := []interface{}{}
+        for _, item := range v {
+            arr = append(arr, p.objectToValue(item))
+        }
+        return arr
+    default:
+        return nil
+    }
+}
+
+// Implement other PDFLibrary interface methods
+func (p *PDFCPUBackend) ExtractText(pageNum int) ([]ExtractedText, error) {
+    // Use pdfcpu's text extraction
+    text, err := api.ExtractPageContent(p.ctx, pageNum)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Convert to our format
+    // Note: pdfcpu may not provide positioned text, so this might need enhancement
+    return []ExtractedText{
+        {
+            Text: text,
+            Page: pageNum,
+        },
+    }, nil
+}
+
+func (p *PDFCPUBackend) GetMetadata() (*Metadata, error) {
+    info := p.ctx.Info
+    if info == nil {
+        return &Metadata{}, nil
+    }
+    
+    return &Metadata{
+        Title:        info.Title,
+        Author:       info.Author,
+        Subject:      info.Subject,
+        Keywords:     info.Keywords,
+        Creator:      info.Creator,
+        Producer:     info.Producer,
+        CreationDate: info.CreationDate,
+        ModDate:      info.ModDate,
+    }, nil
+}
+```
+
+Additional implementation considerations:
+
+1. **Field inheritance handling**: PDF form fields can inherit properties from parent fields
+```go
+func (p *PDFCPUBackend) getInheritedFieldName(dict model.Dict) string {
+    parts := []string{}
+    current := dict
+    
+    for current != nil {
+        if t := current.StringEntry("T"); t != nil {
+            parts = append([]string{*t}, parts...)
+        }
+        
+        // Move to parent
+        if parent := current.DictEntry("Parent"); parent != nil {
+            current = parent
+        } else {
+            break
+        }
+    }
+    
+    return strings.Join(parts, ".")
+}
+```
+
+2. **Widget annotation handling**: Form fields can have multiple widget annotations
+```go
+func (p *PDFCPUBackend) getWidgetAnnotations(fieldDict model.Dict) []model.Dict {
+    widgets := []model.Dict{}
+    
+    // Check if field dict is also a widget (merged)
+    if fieldDict.Entry("Subtype") == model.Name("Widget") {
+        widgets = append(widgets, fieldDict)
+    }
+    
+    // Check Kids for widgets
+    if kids := fieldDict.ArrayEntry("Kids"); kids != nil {
+        for _, kid := range kids {
+            if kidDict, err := p.ctx.DereferenceDict(kid); err == nil {
+                if kidDict.Entry("Subtype") == model.Name("Widget") {
+                    widgets = append(widgets, kidDict)
+                }
+            }
+        }
+    }
+    
+    return widgets
+}
+```
+
+3. **Configuration and optimization**:
+```go
+func (p *PDFCPUBackend) Configure(opts PDFOptions) error {
+    config := pdfcpu.NewDefaultConfiguration()
+    config.ValidationMode = pdfcpu.ValidationRelaxed // For better compatibility
+    config.OptimizeDuplicateContentStreams = true
+    
+    // Apply custom options
+    if opts.StrictValidation {
+        config.ValidationMode = pdfcpu.ValidationStrict
+    }
+    
+    p.config = config
+    return nil
+}
+```
+
+# Test Strategy:
+Comprehensive testing strategy for pdfcpu backend implementation:
+
+1. **Unit tests for field extraction**:
+   - Test each field type (text, checkbox, radio, combobox, listbox, signature)
+   - Verify correct value extraction for filled and empty fields
+   - Test field property extraction (required, readonly, multiline, etc.)
+   - Test field name inheritance from parent fields
+   - Test default value extraction
+
+2. **Integration tests with real PDFs**:
+   - Use IRS tax forms (complex field hierarchies)
+   - Test with Adobe sample forms from PDF reference
+   - Test with forms created by different PDF generators
+   - Verify extraction matches expected field structure
+
+3. **Edge case testing**:
+   - Forms with no AcroForm dictionary
+   - Malformed field dictionaries
+   - Fields with missing required entries
+   - Deeply nested field hierarchies
+   - Fields with multiple widget annotations
+   - Unicode field names and values
+
+4. **Performance benchmarks**:
+   - Compare extraction speed with native implementation
+   - Memory usage profiling for large forms
+   - Concurrent form extraction testing
+
+5. **Compatibility testing**:
+   - Test with PDF 1.4 through 2.0 forms
+   - XFA forms (should gracefully handle as unsupported)
+   - Hybrid AcroForm/XFA documents
+   - Encrypted PDFs with form fields
+
+6. **Validation against PDF specification**:
+   - Verify field flag interpretation matches PDF 1.7 spec
+   - Test appearance stream handling
+   - Validate field value formatting
+   - Check calculation order (CO array) handling
+
+Test implementation example:
+```go
+func TestPDFCPUFormExtraction(t *testing.T) {
+    backend := NewPDFCPUBackend()
+    
+    testCases := []struct {
+        name     string
+        pdfPath  string
+        expected []FormField
+    }{
+        {
+            name:    "simple_text_form",
+            pdfPath: "testdata/forms/simple_text.pdf",
+            expected: []FormField{
+                {
+                    Name:  "name",
+                    Type:  "text",
+                    Value: "John Doe",
+                    Properties: map[string]interface{}{
+                        "maxLength": 50,
+                    },
+                },
+            },
+        },
+        // More test cases...
+    }
+    
+    for _, tc := range testCases {
+        t.Run(tc.name, func(t *testing.T) {
+            file, _ := os.Open(tc.pdfPath)
+            defer file.Close()
+            
+            doc, err := backend.Open(file)
+            require.NoError(t, err)
+            
+            fields, err := doc.ExtractFormFields()
+            require.NoError(t, err)
+            
+            assert.Equal(t, tc.expected, fields)
+        })
+    }
+}
+```

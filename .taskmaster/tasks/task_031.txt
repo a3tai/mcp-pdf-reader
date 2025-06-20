@@ -1,0 +1,405 @@
+# Task ID: 31
+# Title: Implement Comprehensive PDF Tool Testing Framework
+# Status: pending
+# Dependencies: 2, 3, 6, 9, 12, 14, 22, 23
+# Priority: medium
+# Description: Build an automated testing framework that validates all PDF extraction tools against diverse document types, formats, and generators to ensure reliability and prevent regressions based on production testing feedback.
+# Details:
+Create a comprehensive testing framework that systematically validates all PDF tools with various document types and edge cases:
+
+```go
+// internal/testing/framework/pdf_test_framework.go
+package framework
+
+import (
+    "github.com/yourusername/pdfextract/internal/pdf"
+    "github.com/yourusername/pdfextract/internal/testing/corpus"
+    "github.com/yourusername/pdfextract/internal/testing/validators"
+)
+
+type PDFTestFramework struct {
+    corpus      *TestCorpus
+    validators  map[string]Validator
+    reporter    *TestReporter
+    config      *TestConfig
+}
+
+type TestCorpus struct {
+    Documents []TestDocument
+    Categories map[string][]TestDocument
+}
+
+type TestDocument struct {
+    Path         string
+    Generator    string // Adobe, pdfcpu, wkhtmltopdf, Chrome, etc.
+    Version      string // PDF version
+    Features     []string // forms, images, tables, encryption
+    ExpectedData map[string]interface{}
+}
+
+// internal/testing/framework/test_runner.go
+type TestRunner struct {
+    framework *PDFTestFramework
+    tools     map[string]PDFTool
+}
+
+func (tr *TestRunner) RunComprehensiveTests() (*TestReport, error) {
+    report := NewTestReport()
+    
+    // Test each tool against all document types
+    for toolName, tool := range tr.tools {
+        for _, category := range tr.framework.corpus.Categories {
+            results := tr.testToolWithCategory(tool, category)
+            report.AddResults(toolName, results)
+        }
+    }
+    
+    return report, nil
+}
+
+// internal/testing/corpus/builder.go
+type CorpusBuilder struct {
+    sources []DocumentSource
+}
+
+func (cb *CorpusBuilder) BuildTestCorpus() (*TestCorpus, error) {
+    corpus := &TestCorpus{
+        Categories: map[string][]TestDocument{
+            "simple_text": {},
+            "complex_forms": {},
+            "mixed_content": {},
+            "large_documents": {},
+            "encrypted": {},
+            "malformed": {},
+            "edge_cases": {},
+        },
+    }
+    
+    // Populate with diverse test documents
+    corpus.AddDocument("simple_text", TestDocument{
+        Path: "testdata/generators/adobe/simple_text.pdf",
+        Generator: "Adobe Acrobat DC",
+        Version: "1.7",
+        Features: []string{"text"},
+        ExpectedData: map[string]interface{}{
+            "page_count": 1,
+            "text_content": "Expected text content...",
+        },
+    })
+    
+    return corpus, nil
+}
+
+// internal/testing/validators/content_validator.go
+type ContentValidator struct {
+    tolerances map[string]float64
+}
+
+func (cv *ContentValidator) ValidateTextExtraction(actual, expected interface{}) ValidationResult {
+    // Compare extracted text with expected
+    // Handle encoding differences
+    // Allow for minor formatting variations
+}
+
+func (cv *ContentValidator) ValidateFormData(actual, expected interface{}) ValidationResult {
+    // Validate form field extraction
+    // Check field types, values, properties
+    // Handle different form representations
+}
+
+// internal/testing/framework/regression_tests.go
+type RegressionTestSuite struct {
+    baseline map[string]TestBaseline
+    differ   *ContentDiffer
+}
+
+func (rts *RegressionTestSuite) RunRegressionTests(tool PDFTool) []RegressionResult {
+    results := []RegressionResult{}
+    
+    for docID, baseline := range rts.baseline {
+        current := tool.Extract(baseline.Document)
+        diff := rts.differ.Compare(baseline.Expected, current)
+        
+        if diff.HasChanges() {
+            results = append(results, RegressionResult{
+                DocumentID: docID,
+                Baseline: baseline,
+                Current: current,
+                Differences: diff,
+            })
+        }
+    }
+    
+    return results
+}
+
+// internal/testing/generators/test_generator.go
+type TestPDFGenerator struct {
+    generators map[string]PDFGenerator
+}
+
+func (tg *TestPDFGenerator) GenerateTestSuite() error {
+    // Generate PDFs with different tools
+    generators := map[string]PDFGenerator{
+        "pdfcpu": NewPDFCPUGenerator(),
+        "reportlab": NewReportLabGenerator(),
+        "wkhtmltopdf": NewWkHTMLToPDFGenerator(),
+        "chrome": NewChromeGenerator(),
+    }
+    
+    // Create test PDFs with various features
+    for name, gen := range generators {
+        // Simple text document
+        gen.CreateTextDocument("testdata/generated/" + name + "_text.pdf")
+        
+        // Form with all field types
+        gen.CreateFormDocument("testdata/generated/" + name + "_forms.pdf")
+        
+        // Mixed content (text, images, tables)
+        gen.CreateMixedDocument("testdata/generated/" + name + "_mixed.pdf")
+        
+        // Edge cases
+        gen.CreateEdgeCaseDocument("testdata/generated/" + name + "_edge.pdf")
+    }
+}
+
+// internal/testing/framework/performance_tests.go
+type PerformanceTestSuite struct {
+    benchmarks map[string]PerformanceBenchmark
+}
+
+func (pts *PerformanceTestSuite) RunPerformanceTests(tool PDFTool) PerformanceReport {
+    report := PerformanceReport{}
+    
+    for name, benchmark := range pts.benchmarks {
+        result := benchmark.Run(tool)
+        report.AddResult(name, result)
+        
+        // Check against performance thresholds
+        if result.Duration > benchmark.MaxDuration {
+            report.AddWarning(name, "Exceeded time threshold")
+        }
+        
+        if result.MemoryUsed > benchmark.MaxMemory {
+            report.AddWarning(name, "Exceeded memory threshold")
+        }
+    }
+    
+    return report
+}
+
+// cmd/test-framework/main.go
+func main() {
+    framework := framework.NewPDFTestFramework(
+        framework.WithCorpus("testdata/corpus"),
+        framework.WithValidators(DefaultValidators()),
+        framework.WithReporter(NewJSONReporter()),
+    )
+    
+    // Register all tools to test
+    runner := framework.NewTestRunner()
+    runner.RegisterTool("text_extractor", NewTextExtractor())
+    runner.RegisterTool("form_extractor", NewFormExtractor())
+    runner.RegisterTool("image_extractor", NewImageExtractor())
+    runner.RegisterTool("table_extractor", NewTableExtractor())
+    runner.RegisterTool("metadata_extractor", NewMetadataExtractor())
+    
+    // Run comprehensive test suite
+    report, err := runner.RunComprehensiveTests()
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    // Generate test report
+    if err := report.SaveHTML("test-results.html"); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+Implement automated test generation and validation:
+
+```yaml
+# .github/workflows/pdf-tool-tests.yml
+name: PDF Tool Testing
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 0 * * *' # Daily regression tests
+
+jobs:
+  test-framework:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Test Environment
+        run: |
+          # Install PDF generators
+          sudo apt-get update
+          sudo apt-get install -y wkhtmltopdf poppler-utils
+          pip install reportlab pypdf2
+          
+      - name: Generate Test PDFs
+        run: |
+          go run cmd/test-generator/main.go --output testdata/generated
+          
+      - name: Run Comprehensive Tests
+        run: |
+          go test -v ./internal/testing/framework/... -timeout 30m
+          
+      - name: Run Tool Integration Tests
+        run: |
+          go run cmd/test-framework/main.go \
+            --corpus testdata/corpus \
+            --output test-results
+            
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: test-results/
+```
+
+Create diverse test document corpus:
+
+```go
+// testdata/corpus/manifest.json
+{
+  "documents": [
+    {
+      "id": "adobe_simple_text",
+      "path": "adobe/simple_text.pdf",
+      "generator": "Adobe Acrobat DC 2021",
+      "version": "1.7",
+      "features": ["text", "fonts"],
+      "validation": {
+        "text": "testdata/expected/adobe_simple_text.txt",
+        "structure": "testdata/expected/adobe_simple_text.json"
+      }
+    },
+    {
+      "id": "pdfcpu_complex_form",
+      "path": "pdfcpu/complex_form.pdf",
+      "generator": "pdfcpu v0.5.0",
+      "version": "1.7",
+      "features": ["forms", "javascript", "calculations"],
+      "validation": {
+        "forms": "testdata/expected/pdfcpu_complex_form.json"
+      }
+    },
+    {
+      "id": "chrome_print_webpage",
+      "path": "chrome/webpage_print.pdf",
+      "generator": "Chrome 120.0",
+      "version": "1.4",
+      "features": ["text", "images", "links", "css_layout"],
+      "validation": {
+        "content": "testdata/expected/chrome_webpage_print.json"
+      }
+    }
+  ]
+}
+```
+
+# Test Strategy:
+Comprehensive testing strategy for the PDF tool testing framework:
+
+1. **Framework Component Tests**:
+   - Test corpus builder with various document sources
+   - Verify validator implementations for each content type
+   - Test report generation in multiple formats (JSON, HTML, JUnit)
+   - Validate test runner orchestration and parallel execution
+
+2. **Document Diversity Tests**:
+   - Test with PDFs from major generators (Adobe, pdfcpu, Chrome, MS Office)
+   - Include documents with different PDF versions (1.4, 1.5, 1.7, 2.0)
+   - Test various content types: text-only, forms, images, tables, mixed
+   - Include edge cases: empty PDFs, corrupted files, huge documents
+
+3. **Tool Validation Tests**:
+   - Run each extraction tool against the full test corpus
+   - Compare results against expected baselines
+   - Test error handling for malformed documents
+   - Verify consistent results across multiple runs
+
+4. **Regression Testing**:
+   - Establish baseline results for all tools
+   - Detect any changes in extraction behavior
+   - Generate detailed diff reports for any variations
+   - Test with production PDFs that previously caused issues
+
+5. **Performance Benchmarks**:
+   - Measure extraction time for documents of various sizes
+   - Monitor memory usage during processing
+   - Test with documents up to 1000+ pages
+   - Verify streaming tools maintain constant memory usage
+
+6. **Integration Tests**:
+   - Test framework integration with CI/CD pipeline
+   - Verify automated test execution on schedule
+   - Test result artifact generation and storage
+   - Validate notification system for test failures
+
+7. **Generator-Specific Tests**:
+   - Adobe: Test with forms, portfolios, signed documents
+   - pdfcpu: Test with programmatically generated content
+   - Chrome/browsers: Test with printed web pages, CSS layouts
+   - Office: Test with converted documents, embedded objects
+
+8. **Validation Accuracy**:
+   - Test fuzzy matching for text comparison
+   - Verify tolerance settings for coordinate-based content
+   - Test Unicode and encoding handling across generators
+   - Validate form field type detection accuracy
+
+# Subtasks:
+## 1. Design Core Testing Framework Architecture [pending]
+### Dependencies: None
+### Description: Create the foundational architecture for the PDF testing framework including core interfaces, data structures, and the main framework components
+### Details:
+Implement PDFTestFramework struct with TestCorpus, Validator interfaces, TestReporter, and TestConfig. Define TestDocument structure with metadata fields for generator, version, features, and expected data. Create base interfaces for PDFTool and Validator to ensure extensibility.
+
+## 2. Build Test Corpus Management System [pending]
+### Dependencies: 31.1
+### Description: Implement the test corpus builder and management system that organizes test documents by categories and handles document metadata
+### Details:
+Create CorpusBuilder to load and categorize test documents from manifest.json. Implement document categorization (simple_text, complex_forms, mixed_content, large_documents, encrypted, malformed, edge_cases). Build corpus loading from filesystem with validation of expected data files.
+
+## 3. Implement Content Validators [pending]
+### Dependencies: 31.1
+### Description: Create comprehensive validators for different PDF content types including text, forms, images, tables, and metadata
+### Details:
+Implement ContentValidator with methods for ValidateTextExtraction (handling encoding differences and formatting variations), ValidateFormData (field types, values, properties), ValidateImageExtraction, ValidateTableStructure, and ValidateMetadata. Include configurable tolerances for fuzzy matching.
+
+## 4. Create Test PDF Generators [pending]
+### Dependencies: 31.2
+### Description: Build test PDF generation system that creates PDFs using different generators (pdfcpu, reportlab, wkhtmltopdf, Chrome) with various features
+### Details:
+Implement TestPDFGenerator with adapters for each PDF generation tool. Create methods to generate simple text documents, complex forms with all field types, mixed content documents, and edge case documents. Ensure each generator creates consistent test cases with known expected outputs.
+
+## 5. Build Test Runner and Execution Engine [pending]
+### Dependencies: 31.2, 31.3
+### Description: Implement the test runner that executes tests across all tools and document categories, collecting results and handling errors
+### Details:
+Create TestRunner with tool registration, implement RunComprehensiveTests method that iterates through all tools and document categories. Add parallel test execution support, timeout handling, and error recovery. Implement result aggregation and test status tracking.
+
+## 6. Implement Regression Testing Suite [pending]
+### Dependencies: 31.3, 31.5
+### Description: Create regression testing capabilities that compare current results against baseline data and detect changes
+### Details:
+Build RegressionTestSuite with baseline storage and management. Implement ContentDiffer for intelligent comparison of extraction results. Create baseline generation and update mechanisms. Add configurable thresholds for acceptable differences and change detection algorithms.
+
+## 7. Add Performance Testing and Benchmarking [pending]
+### Dependencies: 31.5
+### Description: Implement performance testing suite that measures execution time, memory usage, and resource consumption for each tool
+### Details:
+Create PerformanceTestSuite with configurable benchmarks for different document sizes and complexities. Implement performance metrics collection (duration, memory, CPU usage). Add threshold checking and performance regression detection. Create performance trend tracking over time.
+
+## 8. Create Test Reporting and CI/CD Integration [pending]
+### Dependencies: 31.5, 31.6, 31.7
+### Description: Build comprehensive test reporting system and integrate with GitHub Actions for automated testing
+### Details:
+Implement TestReporter with HTML, JSON, and JUnit XML output formats. Create detailed reports showing test results, regressions, performance metrics, and coverage by document type. Implement GitHub Actions workflow for automated testing on push, PR, and scheduled runs. Add artifact uploading and test result visualization.
+

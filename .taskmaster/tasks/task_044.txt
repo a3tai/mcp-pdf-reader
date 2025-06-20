@@ -1,0 +1,309 @@
+# Task ID: 44
+# Title: Fix MediaBox Parsing Errors
+# Status: pending
+# Dependencies: 2, 3, 4, 34
+# Priority: high
+# Description: Implement proper MediaBox parsing that handles various PDF structures including missing MediaBox entries, inherited MediaBox from parent nodes, and different coordinate systems to fix extraction failures affecting table extraction, form extraction, and all advanced features.
+# Details:
+Implement robust MediaBox parsing that handles all PDF specification variations and edge cases:
+
+```go
+// internal/pdf/page/mediabox_parser.go
+package page
+
+import (
+    "fmt"
+    "github.com/yourusername/pdfextract/internal/pdf"
+    "github.com/yourusername/pdfextract/internal/pdf/errors"
+)
+
+type MediaBoxParser struct {
+    resolver   pdf.ObjectResolver
+    logger     *log.Logger
+    cache      map[string]*Rectangle
+}
+
+type Rectangle struct {
+    LLX float64 // Lower-left X
+    LLY float64 // Lower-left Y
+    URX float64 // Upper-right X
+    URY float64 // Upper-right Y
+}
+
+// ParseMediaBox extracts MediaBox with proper inheritance and validation
+func (p *MediaBoxParser) ParseMediaBox(pageDict map[string]interface{}, pageTree *PageTreeNode) (*Rectangle, error) {
+    defer func() {
+        if r := recover(); r != nil {
+            p.logger.Error("Panic in MediaBox parsing: %v", r)
+            // Return default US Letter size as fallback
+            return &Rectangle{0, 0, 612, 792}, fmt.Errorf("recovered from panic: %v", r)
+        }
+    }()
+
+    // Check cache first
+    if pageRef, ok := pageDict["__ref__"].(pdf.ObjectRef); ok {
+        cacheKey := fmt.Sprintf("%d_%d", pageRef.Number, pageRef.Generation)
+        if cached, exists := p.cache[cacheKey]; exists {
+            return cached, nil
+        }
+    }
+
+    // Try direct MediaBox in page dictionary
+    if mediaBox := p.extractMediaBox(pageDict); mediaBox != nil {
+        return mediaBox, nil
+    }
+
+    // Walk up the page tree for inherited MediaBox
+    current := pageTree
+    for current != nil {
+        if parentDict := current.Dictionary; parentDict != nil {
+            if mediaBox := p.extractMediaBox(parentDict); mediaBox != nil {
+                return mediaBox, nil
+            }
+        }
+        current = current.Parent
+    }
+
+    // No MediaBox found - use PDF default
+    p.logger.Warn("No MediaBox found, using default US Letter size")
+    return &Rectangle{0, 0, 612, 792}, nil
+}
+
+// extractMediaBox from a dictionary entry
+func (p *MediaBoxParser) extractMediaBox(dict map[string]interface{}) *Rectangle {
+    mediaBoxObj, exists := dict["MediaBox"]
+    if !exists {
+        return nil
+    }
+
+    // Handle indirect reference
+    if ref, ok := mediaBoxObj.(pdf.ObjectRef); ok {
+        resolved, err := p.resolver.ResolveObject(ref)
+        if err != nil {
+            p.logger.Debug("Failed to resolve MediaBox reference: %v", err)
+            return nil
+        }
+        mediaBoxObj = resolved
+    }
+
+    // Parse array format [llx lly urx ury]
+    switch v := mediaBoxObj.(type) {
+    case []interface{}:
+        return p.parseRectangleArray(v)
+    case pdf.Array:
+        return p.parseRectangleArray([]interface{}(v))
+    case *pdf.Array:
+        return p.parseRectangleArray([]interface{}(*v))
+    default:
+        p.logger.Debug("Unknown MediaBox type: %T", v)
+        return nil
+    }
+}
+
+// parseRectangleArray converts array to Rectangle with validation
+func (p *MediaBoxParser) parseRectangleArray(arr []interface{}) *Rectangle {
+    if len(arr) != 4 {
+        p.logger.Debug("Invalid MediaBox array length: %d", len(arr))
+        return nil
+    }
+
+    rect := &Rectangle{}
+    values := []float64{0, 0, 0, 0}
+
+    // Convert each element to float64
+    for i, val := range arr {
+        switch v := val.(type) {
+        case float64:
+            values[i] = v
+        case int:
+            values[i] = float64(v)
+        case pdf.Number:
+            values[i] = float64(v)
+        case pdf.Integer:
+            values[i] = float64(v)
+        case pdf.Real:
+            values[i] = float64(v)
+        default:
+            // Try string conversion as last resort
+            if str, ok := val.(string); ok {
+                if f, err := strconv.ParseFloat(str, 64); err == nil {
+                    values[i] = f
+                    continue
+                }
+            }
+            p.logger.Debug("Invalid MediaBox value type at index %d: %T", i, val)
+            return nil
+        }
+    }
+
+    rect.LLX = values[0]
+    rect.LLY = values[1]
+    rect.URX = values[2]
+    rect.URY = values[3]
+
+    // Validate rectangle
+    if rect.URX <= rect.LLX || rect.URY <= rect.LLY {
+        p.logger.Warn("Invalid MediaBox dimensions: [%f %f %f %f]", rect.LLX, rect.LLY, rect.URX, rect.URY)
+        // Try to fix common issues
+        if rect.URX < rect.LLX {
+            rect.LLX, rect.URX = rect.URX, rect.LLX
+        }
+        if rect.URY < rect.LLY {
+            rect.LLY, rect.URY = rect.URY, rect.LLY
+        }
+    }
+
+    return rect
+}
+
+// BuildPageTree constructs the page tree hierarchy for inheritance
+func (p *MediaBoxParser) BuildPageTree(catalog map[string]interface{}) (*PageTreeNode, error) {
+    pagesRef, ok := catalog["Pages"].(pdf.ObjectRef)
+    if !ok {
+        return nil, fmt.Errorf("invalid Pages reference in catalog")
+    }
+
+    pagesObj, err := p.resolver.ResolveObject(pagesRef)
+    if err != nil {
+        return nil, fmt.Errorf("failed to resolve Pages: %w", err)
+    }
+
+    pagesDict, ok := pagesObj.(map[string]interface{})
+    if !ok {
+        return nil, fmt.Errorf("Pages is not a dictionary")
+    }
+
+    return p.buildPageTreeNode(pagesDict, nil)
+}
+
+type PageTreeNode struct {
+    Type       string
+    Dictionary map[string]interface{}
+    Parent     *PageTreeNode
+    Kids       []*PageTreeNode
+}
+
+func (p *MediaBoxParser) buildPageTreeNode(dict map[string]interface{}, parent *PageTreeNode) (*PageTreeNode, error) {
+    node := &PageTreeNode{
+        Dictionary: dict,
+        Parent:     parent,
+    }
+
+    if typeObj, ok := dict["Type"].(pdf.Name); ok {
+        node.Type = string(typeObj)
+    }
+
+    // Process kids for page tree nodes
+    if node.Type == "Pages" {
+        if kidsObj, ok := dict["Kids"]; ok {
+            kids := p.resolveKidsArray(kidsObj)
+            for _, kidRef := range kids {
+                kidObj, err := p.resolver.ResolveObject(kidRef)
+                if err != nil {
+                    p.logger.Debug("Failed to resolve kid: %v", err)
+                    continue
+                }
+
+                if kidDict, ok := kidObj.(map[string]interface{}); ok {
+                    kidNode, err := p.buildPageTreeNode(kidDict, node)
+                    if err == nil {
+                        node.Kids = append(node.Kids, kidNode)
+                    }
+                }
+            }
+        }
+    }
+
+    return node, nil
+}
+
+// Integration with extraction tools
+func (p *MediaBoxParser) GetPageDimensions(pageNum int, doc *pdf.Document) (*Rectangle, error) {
+    page, err := doc.GetPage(pageNum)
+    if err != nil {
+        return nil, fmt.Errorf("failed to get page %d: %w", pageNum, err)
+    }
+
+    pageTree, err := p.BuildPageTree(doc.Catalog)
+    if err != nil {
+        p.logger.Warn("Failed to build page tree: %v", err)
+        pageTree = nil
+    }
+
+    return p.ParseMediaBox(page.Dictionary, p.findPageNode(page, pageTree))
+}
+```
+
+Update extraction tools to use the new MediaBox parser:
+
+```go
+// internal/extractors/table_extractor.go
+func (te *TableExtractor) ExtractTables(doc *pdf.Document) ([]Table, error) {
+    mediaBoxParser := page.NewMediaBoxParser(doc.Resolver, te.logger)
+    
+    for pageNum := 1; pageNum <= doc.NumPages; pageNum++ {
+        // Get proper page dimensions
+        mediaBox, err := mediaBoxParser.GetPageDimensions(pageNum, doc)
+        if err != nil {
+            te.logger.Warn("Failed to get page dimensions for page %d: %v", pageNum, err)
+            // Continue with default dimensions
+            mediaBox = &page.Rectangle{0, 0, 612, 792}
+        }
+        
+        // Use mediaBox for coordinate calculations
+        te.processPageWithDimensions(pageNum, mediaBox)
+    }
+}
+
+// internal/extractors/form_extractor.go
+func (fe *FormExtractor) ExtractForms(doc *pdf.Document) ([]FormField, error) {
+    mediaBoxParser := page.NewMediaBoxParser(doc.Resolver, fe.logger)
+    
+    // Similar integration for form extraction
+}
+```
+
+# Test Strategy:
+Comprehensive testing strategy for MediaBox parsing fixes:
+
+1. **Basic MediaBox Parsing Tests**:
+   - Test with PDFs containing direct MediaBox arrays: `[0 0 612 792]`
+   - Test with indirect object references to MediaBox
+   - Test with missing MediaBox (should use default US Letter)
+   - Test with various numeric types (int, float, string representations)
+
+2. **Inheritance Tests**:
+   - Create test PDFs with MediaBox only in Pages root (not in individual Page objects)
+   - Test multi-level page tree inheritance (Pages -> Pages -> Page)
+   - Test override scenarios where child Page has different MediaBox than parent
+   - Verify correct inheritance order (closest parent wins)
+
+3. **Edge Case Tests**:
+   - Test with inverted coordinates (URX < LLX, URY < LLY)
+   - Test with zero-size MediaBox
+   - Test with extremely large coordinates
+   - Test with negative coordinates
+   - Test with non-standard array lengths (< 4 or > 4 elements)
+
+4. **Error Recovery Tests**:
+   - Test with corrupted MediaBox data
+   - Test with circular references in page tree
+   - Test with missing Pages reference in catalog
+   - Verify panic recovery doesn't crash server
+   - Ensure fallback to default dimensions works
+
+5. **Integration Tests**:
+   - Test table extraction with various MediaBox configurations
+   - Test form field positioning with inherited MediaBox
+   - Test coordinate transformations with non-standard MediaBox origins
+   - Verify all extraction methods work with fixed MediaBox parsing
+
+6. **Performance Tests**:
+   - Test caching effectiveness with large PDFs
+   - Measure parsing time for complex page trees
+   - Verify no memory leaks in recursive tree walking
+
+7. **Specification Compliance**:
+   - Test against PDF 1.4 and 1.7 specification examples
+   - Verify handling of all coordinate system variations
+   - Test with real-world PDFs from different generators (Adobe, LibreOffice, etc.)

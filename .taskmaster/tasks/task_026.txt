@@ -1,0 +1,218 @@
+# Task ID: 26
+# Title: Fix pdf_get_metadata Tool Empty Results Issue
+# Status: done
+# Dependencies: 2, 3
+# Priority: high
+# Description: Debug and fix the pdf_get_metadata tool that returns empty results despite PDFs containing rich metadata, while pdf_stats_file successfully extracts the same metadata, indicating a parsing or data mapping issue in the metadata extraction logic.
+# Details:
+Investigate and fix the broken pdf_get_metadata tool by analyzing the discrepancy with pdf_stats_file:
+
+```go
+// cmd/pdf_get_metadata/main.go
+// Debug the metadata extraction to identify why it returns empty results
+func getMetadata(pdfPath string) (*PDFMetadata, error) {
+    log.Printf("Extracting metadata from: %s", pdfPath)
+    
+    // Step 1: Add debugging to trace metadata extraction
+    parser := pdf.NewParser()
+    doc, err := parser.Parse(pdfPath)
+    if err != nil {
+        return nil, fmt.Errorf("failed to parse PDF: %w", err)
+    }
+    
+    // Step 2: Debug Info dictionary extraction
+    log.Printf("Document parsed, extracting Info dictionary")
+    infoDictObj := doc.GetTrailer().Get("Info")
+    if infoDictObj == nil {
+        log.Printf("WARNING: No Info dictionary found in trailer")
+        // Check if metadata is in catalog instead
+        catalog := doc.GetCatalog()
+        if catalog != nil {
+            metadataStream := catalog.Get("Metadata")
+            if metadataStream != nil {
+                log.Printf("Found metadata in catalog instead of Info dict")
+            }
+        }
+    }
+    
+    // Step 3: Compare with pdf_stats_file implementation
+    // The working implementation might be using different extraction methods
+    metadata := &PDFMetadata{
+        Title:        extractString(infoDictObj, "Title"),
+        Author:       extractString(infoDictObj, "Author"),
+        Subject:      extractString(infoDictObj, "Subject"),
+        Keywords:     extractString(infoDictObj, "Keywords"),
+        Creator:      extractString(infoDictObj, "Creator"),
+        Producer:     extractString(infoDictObj, "Producer"),
+        CreationDate: extractDate(infoDictObj, "CreationDate"),
+        ModDate:      extractDate(infoDictObj, "ModDate"),
+    }
+    
+    // Step 4: Check XMP metadata stream
+    if isEmpty(metadata) {
+        log.Printf("Info dict empty, checking XMP metadata")
+        xmpMetadata, err := extractXMPMetadata(doc)
+        if err == nil && xmpMetadata != nil {
+            mergeMetadata(metadata, xmpMetadata)
+        }
+    }
+    
+    return metadata, nil
+}
+
+// Fix string extraction to handle various encodings
+func extractString(dict pdf.Object, key string) string {
+    if dict == nil {
+        return ""
+    }
+    
+    obj := dict.Get(key)
+    if obj == nil {
+        return ""
+    }
+    
+    // Handle different string encodings
+    switch v := obj.(type) {
+    case *pdf.StringObject:
+        // Check for UTF-16BE BOM
+        if bytes.HasPrefix(v.Bytes(), []byte{0xFE, 0xFF}) {
+            return decodeUTF16BE(v.Bytes()[2:])
+        }
+        // Try UTF-8 first, fall back to Latin-1
+        if utf8.Valid(v.Bytes()) {
+            return string(v.Bytes())
+        }
+        return decodeLatin1(v.Bytes())
+    case *pdf.NameObject:
+        return v.String()
+    default:
+        log.Printf("Unexpected type for %s: %T", key, v)
+        return ""
+    }
+}
+
+// Compare with pdf_stats_file implementation
+func analyzeImplementationDifferences() {
+    // Key differences to investigate:
+    // 1. pdf_stats_file might be using a different PDF library
+    // 2. It might handle string encoding differently
+    // 3. It might look in additional locations for metadata
+    // 4. It might have better error handling for malformed metadata
+}
+
+// Add comprehensive metadata search
+func findAllMetadata(doc *pdf.Document) map[string]interface{} {
+    metadata := make(map[string]interface{})
+    
+    // 1. Check trailer Info dictionary
+    if info := doc.GetTrailer().Get("Info"); info != nil {
+        metadata["info"] = extractInfoDict(info)
+    }
+    
+    // 2. Check catalog metadata stream
+    if catalog := doc.GetCatalog(); catalog != nil {
+        if mdStream := catalog.Get("Metadata"); mdStream != nil {
+            metadata["xmp"] = extractXMPStream(mdStream)
+        }
+    }
+    
+    // 3. Check document information dictionary
+    if docInfo := doc.GetDocumentInfo(); docInfo != nil {
+        metadata["docInfo"] = docInfo
+    }
+    
+    return metadata
+}
+```
+
+Key areas to investigate:
+
+1. **String Encoding Issues**:
+   - PDF strings can be encoded in multiple ways (PDFDocEncoding, UTF-16BE)
+   - The tool might not be handling all encoding types correctly
+   - Add proper encoding detection and conversion
+
+2. **Metadata Location**:
+   - Metadata can be in Info dictionary (trailer)
+   - Metadata can be in XMP stream (catalog)
+   - Some PDFs use non-standard locations
+
+3. **Implementation Comparison**:
+   - Analyze pdf_stats_file source to understand its approach
+   - Identify key differences in parsing logic
+   - Port successful techniques to pdf_get_metadata
+
+4. **Error Handling**:
+   - Add comprehensive error logging
+   - Handle malformed or missing metadata gracefully
+   - Provide partial results when possible
+
+# Test Strategy:
+Comprehensive testing and debugging strategy to fix pdf_get_metadata:
+
+1. **Comparative Analysis**:
+   - Run both pdf_get_metadata and pdf_stats_file on the same test PDFs
+   - Compare the output to identify what pdf_stats_file extracts successfully
+   - Use PDF inspection tools (qpdf --show-all-pages) to verify actual metadata
+
+2. **Test Cases**:
+   - Test with PDFs known to have metadata (Adobe-generated PDFs)
+   - Test with PDFs using different metadata encodings (UTF-16BE, Latin-1)
+   - Test with PDFs having XMP metadata streams
+   - Test with PDFs having metadata in non-standard locations
+
+3. **Debugging Steps**:
+   - Add verbose logging to trace each step of metadata extraction
+   - Log raw bytes of metadata strings before decoding
+   - Compare byte-by-byte with pdf_stats_file extraction
+   - Use hex dumps to identify encoding issues
+
+4. **Validation**:
+   - Verify all standard metadata fields are extracted (Title, Author, Subject, etc.)
+   - Check date parsing handles PDF date format (D:YYYYMMDDHHmmSSOHH'mm)
+   - Ensure Unicode metadata is properly decoded
+   - Test with multilingual metadata (Japanese, Arabic, etc.)
+
+5. **Success Metrics**:
+   - Tool should achieve >90% success rate on test corpus
+   - All metadata fields present in pdf_stats_file output should be extracted
+   - No empty results for PDFs with verified metadata
+   - Performance should be comparable to pdf_stats_file
+
+# Subtasks:
+## 1. Analyze pdf_stats_file Implementation [done]
+### Dependencies: None
+### Description: Examine the working pdf_stats_file tool's source code to understand its metadata extraction approach and identify key differences with pdf_get_metadata
+### Details:
+Locate and analyze pdf_stats_file source code, focusing on: 1) Which PDF parsing library it uses, 2) How it extracts metadata from PDFs, 3) String encoding handling methods, 4) Metadata location search patterns. Document all findings in comments for reference during implementation.
+
+## 2. Implement Comprehensive String Encoding Support [done]
+### Dependencies: 26.1
+### Description: Fix the extractString function to properly handle all PDF string encoding types including PDFDocEncoding, UTF-16BE, and UTF-8
+### Details:
+Enhance extractString function to: 1) Detect UTF-16BE BOM (0xFE 0xFF), 2) Implement proper UTF-16BE decoding, 3) Add PDFDocEncoding to UTF-8 conversion, 4) Handle Latin-1 fallback correctly, 5) Add logging for encoding detection. Create helper functions decodeUTF16BE() and decodeLatin1() as needed.
+
+## 3. Add Multiple Metadata Location Search [done]
+### Dependencies: 26.1
+### Description: Implement comprehensive metadata search that checks all possible locations where PDF metadata can be stored
+### Details:
+Implement findAllMetadata function to search: 1) Trailer Info dictionary, 2) Catalog Metadata stream (XMP), 3) Document information dictionary, 4) Any non-standard locations identified from pdf_stats_file analysis. Ensure proper null checking and error handling for each location.
+
+## 4. Implement XMP Metadata Extraction [done]
+### Dependencies: 26.2, 26.3
+### Description: Create robust XMP metadata extraction and parsing functionality to handle PDFs that store metadata in XML format
+### Details:
+Implement extractXMPMetadata() function to: 1) Extract XMP stream from catalog, 2) Parse XML content safely, 3) Map XMP fields to PDFMetadata struct fields, 4) Handle namespaces (dc:, xmp:, pdf:), 5) Implement mergeMetadata() to combine XMP data with Info dict data.
+
+## 5. Add Comprehensive Error Handling and Logging [done]
+### Dependencies: 26.2, 26.3, 26.4
+### Description: Implement detailed error handling and diagnostic logging throughout the metadata extraction process
+### Details:
+Add structured logging to trace: 1) Each metadata extraction attempt, 2) Encoding detection results, 3) Found vs missing metadata fields, 4) Any parsing errors with context. Implement graceful degradation to return partial results when some metadata is corrupted. Add isEmpty() helper to check if metadata struct is empty.
+
+## 6. Integration Testing and Performance Optimization [done]
+### Dependencies: 26.5
+### Description: Perform comprehensive integration testing comparing pdf_get_metadata with pdf_stats_file and optimize performance
+### Details:
+1) Create test suite with diverse PDF samples (different creators, versions, metadata locations), 2) Compare outputs between fixed pdf_get_metadata and pdf_stats_file, 3) Ensure 100% metadata extraction parity, 4) Profile and optimize any performance bottlenecks, 5) Update documentation with supported metadata formats.
+

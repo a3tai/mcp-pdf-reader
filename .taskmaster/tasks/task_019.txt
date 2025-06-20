@@ -1,0 +1,273 @@
+# Task ID: 19
+# Title: Implement Streaming PDF Processing for Large Files
+# Status: done
+# Dependencies: 2, 3, 4
+# Priority: high
+# Description: Build a streaming PDF processor that handles large documents exceeding memory limits by processing them in chunks, implementing efficient memory management and progressive parsing techniques.
+# Details:
+Implement a comprehensive streaming PDF processing system that can handle arbitrarily large PDF files without loading them entirely into memory:
+
+```go
+// internal/pdf/streaming/stream_parser.go
+package streaming
+
+import (
+    "bufio"
+    "io"
+    "github.com/yourusername/pdfextract/internal/pdf"
+)
+
+type StreamParser struct {
+    reader      *bufio.Reader
+    chunkSize   int
+    offset      int64
+    xrefCache   *LRUCache // Limited size xref cache
+    objectCache *LRUCache // Limited size object cache
+}
+
+func NewStreamParser(r io.ReadSeeker, opts ...Option) *StreamParser {
+    return &StreamParser{
+        reader:      bufio.NewReaderSize(r, 64*1024), // 64KB buffer
+        chunkSize:   1024 * 1024, // 1MB chunks
+        xrefCache:   NewLRUCache(1000), // Cache last 1000 xref entries
+        objectCache: NewLRUCache(500),  // Cache last 500 objects
+    }
+}
+
+// internal/pdf/streaming/chunk_processor.go
+type ChunkProcessor struct {
+    parser      *StreamParser
+    pageBuffer  *PageBuffer
+    textBuffer  *TextBuffer
+    imageBuffer *ImageBuffer
+}
+
+func (cp *ChunkProcessor) ProcessChunk(start, end int64) (*ChunkResult, error) {
+    // Seek to chunk start
+    // Parse objects in chunk
+    // Extract content progressively
+    // Flush buffers when full
+}
+
+// internal/pdf/streaming/page_streamer.go
+type PageStreamer struct {
+    parser   *StreamParser
+    pageSize int // Max pages in memory
+}
+
+func (ps *PageStreamer) StreamPages(callback func(*pdf.Page) error) error {
+    pageNum := 0
+    for {
+        page, err := ps.parser.GetNextPage()
+        if err == io.EOF {
+            break
+        }
+        if err != nil {
+            return err
+        }
+        
+        // Process page
+        if err := callback(page); err != nil {
+            return err
+        }
+        
+        // Free page memory
+        page.Release()
+        pageNum++
+    }
+    return nil
+}
+
+// internal/pdf/streaming/memory_manager.go
+type MemoryManager struct {
+    maxMemory   int64
+    currentUsed int64
+    gcTrigger   float64 // Trigger GC at % of max
+}
+
+func (mm *MemoryManager) AllocateBuffer(size int) ([]byte, error) {
+    if mm.currentUsed + int64(size) > mm.maxMemory {
+        if err := mm.FreeMemory(); err != nil {
+            return nil, err
+        }
+    }
+    
+    buf := make([]byte, size)
+    mm.currentUsed += int64(size)
+    
+    if float64(mm.currentUsed)/float64(mm.maxMemory) > mm.gcTrigger {
+        runtime.GC()
+    }
+    
+    return buf, nil
+}
+
+// pkg/streaming/api.go
+type StreamingExtractor struct {
+    parser  *StreamParser
+    options StreamOptions
+}
+
+type StreamOptions struct {
+    MaxMemoryMB    int
+    ChunkSizeMB    int
+    PageBufferSize int
+    EnableCaching  bool
+}
+
+func (se *StreamingExtractor) ExtractText(reader io.ReadSeeker, writer io.Writer) error {
+    parser := NewStreamParser(reader, WithMemoryLimit(se.options.MaxMemoryMB))
+    
+    return parser.StreamPages(func(page *pdf.Page) error {
+        text, err := page.ExtractText()
+        if err != nil {
+            return err
+        }
+        
+        _, err = writer.Write([]byte(text))
+        return err
+    })
+}
+
+// internal/pdf/streaming/progressive_parser.go
+type ProgressiveParser struct {
+    baseParser *StreamParser
+    progress   chan<- Progress
+}
+
+type Progress struct {
+    BytesProcessed int64
+    TotalBytes     int64
+    PagesProcessed int
+    CurrentPage    int
+    MemoryUsed     int64
+}
+
+func (pp *ProgressiveParser) ParseWithProgress(ctx context.Context) error {
+    ticker := time.NewTicker(100 * time.Millisecond)
+    defer ticker.Stop()
+    
+    go func() {
+        for {
+            select {
+            case <-ticker.C:
+                pp.progress <- pp.getProgress()
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+    
+    return pp.parse(ctx)
+}
+
+// internal/pdf/streaming/buffered_extractor.go
+type BufferedExtractor struct {
+    textBuffer  *RingBuffer
+    imageBuffer *RingBuffer
+    tableBuffer *RingBuffer
+    flushSize   int
+}
+
+func (be *BufferedExtractor) Extract(page *pdf.Page) error {
+    // Extract content to buffers
+    if err := be.extractText(page); err != nil {
+        return err
+    }
+    
+    // Check if buffers need flushing
+    if be.textBuffer.Size() > be.flushSize {
+        if err := be.flushTextBuffer(); err != nil {
+            return err
+        }
+    }
+    
+    return nil
+}
+
+// internal/pdf/streaming/xref_stream.go
+type XRefStreamer struct {
+    reader    io.ReadSeeker
+    cache     *XRefCache
+    chunkSize int
+}
+
+func (xs *XRefStreamer) GetObject(ref pdf.ObjectRef) (*pdf.Object, error) {
+    // Check cache first
+    if obj, ok := xs.cache.Get(ref); ok {
+        return obj, nil
+    }
+    
+    // Stream to object location
+    offset, err := xs.findObjectOffset(ref)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Read only the object
+    obj, err := xs.readObjectAt(offset)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Cache for future use
+    xs.cache.Put(ref, obj)
+    return obj, nil
+}
+```
+
+Key implementation considerations:
+
+1. **Memory-bounded processing**: Implement strict memory limits with configurable thresholds
+2. **Lazy loading**: Load PDF objects only when needed, not entire file
+3. **Streaming extraction**: Process content as it's read without storing entire document
+4. **Progressive parsing**: Allow partial results and progress reporting
+5. **Efficient caching**: Use LRU caches for frequently accessed objects
+6. **Chunk-based processing**: Divide large files into manageable chunks
+7. **Buffer management**: Use ring buffers and flush strategies
+8. **Resource cleanup**: Ensure proper memory release after processing
+
+# Test Strategy:
+Comprehensive testing strategy for streaming PDF processing:
+
+1. **Memory limit tests**:
+   - Create test PDFs of various sizes (100MB, 500MB, 1GB+)
+   - Monitor memory usage during processing with runtime.MemStats
+   - Verify memory never exceeds configured limits
+   - Test with artificially low memory limits (e.g., 50MB for 1GB file)
+
+2. **Chunk processing tests**:
+   - Test chunk boundary handling (objects split across chunks)
+   - Verify no data loss between chunks
+   - Test different chunk sizes and their impact on performance
+   - Validate chunk overlap handling for cross-references
+
+3. **Streaming accuracy tests**:
+   - Compare streaming extraction results with full-file extraction
+   - Test with complex PDFs (many pages, embedded content, forms)
+   - Verify all content types extracted correctly (text, images, tables)
+   - Test partial extraction (specific page ranges)
+
+4. **Performance benchmarks**:
+   - Measure processing time for various file sizes
+   - Compare memory usage patterns with non-streaming approach
+   - Test concurrent streaming of multiple files
+   - Profile CPU usage and identify bottlenecks
+
+5. **Error handling tests**:
+   - Test with corrupted PDFs that fail mid-stream
+   - Verify graceful handling of memory allocation failures
+   - Test context cancellation during streaming
+   - Validate recovery from partial failures
+
+6. **Cache effectiveness tests**:
+   - Monitor cache hit/miss ratios
+   - Test cache eviction strategies
+   - Verify cache size limits are respected
+   - Test performance impact of different cache sizes
+
+7. **Integration tests**:
+   - Test streaming with existing extractors (text, image, table)
+   - Verify compatibility with form extraction
+   - Test progress reporting accuracy
+   - Validate buffer flushing strategies

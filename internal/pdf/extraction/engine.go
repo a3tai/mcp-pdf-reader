@@ -4,10 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/a3tai/mcp-pdf-reader/internal/pdf/errors"
 	"github.com/ledongthuc/pdf"
 )
 
@@ -71,6 +74,8 @@ type DefaultEngine struct {
 	ocrEnabled       bool
 	tableDetectionTh float64
 	debugMode        bool
+	pdfReader        *pdf.Reader
+	filePath         string
 }
 
 // NewEngine creates a new extraction engine with default settings
@@ -95,7 +100,7 @@ func NewEngineWithConfig(maxFileSize, maxTextSize int64, ocrEnabled bool) *Defau
 	}
 }
 
-// Extract performs comprehensive content extraction from a PDF
+// Extract performs comprehensive content extraction from a PDF with robust error handling
 func (e *DefaultEngine) Extract(req ExtractionRequest) (*ExtractionResult, error) {
 	startTime := time.Now()
 
@@ -104,12 +109,28 @@ func (e *DefaultEngine) Extract(req ExtractionRequest) (*ExtractionResult, error
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
-	// Open PDF file
-	f, pdfReader, err := pdf.Open(req.FilePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open PDF: %w", err)
+	// Use robust parser for better error handling
+	robustParser := errors.NewRobustParser()
+	robustParser.EnableDebugLogging(true)
+
+	// Attempt robust parsing
+	parseResult, err := robustParser.ParseFile(req.FilePath)
+	if err != nil && !parseResult.Success {
+		return nil, fmt.Errorf("failed to open PDF with robust parser: %w", err)
 	}
-	defer f.Close()
+
+	f := parseResult.File
+	pdfReader := parseResult.Reader
+	defer func() {
+		if f != nil {
+			f.Close()
+		}
+		robustParser.Close()
+	}()
+
+	// Store pdfReader for form extraction
+	e.pdfReader = pdfReader
+	e.filePath = req.FilePath
 
 	// Initialize result
 	result := &ExtractionResult{
@@ -140,15 +161,23 @@ func (e *DefaultEngine) Extract(req ExtractionRequest) (*ExtractionResult, error
 	pagesToProcess := e.determinePagesToProcess(req.Config.Pages, pdfReader.NumPage())
 	result.ProcessedPages = pagesToProcess
 
-	// Extract content from each page
+	// Extract content from each page with enhanced error handling
 	for _, pageNum := range pagesToProcess {
-		pageElements, pageErrors := e.extractPageContent(pdfReader, pageNum, req.Config)
+		pageElements, pageErrors := e.extractPageContentWithRecovery(pdfReader, pageNum, req.Config, req.FilePath)
 		result.Elements = append(result.Elements, pageElements...)
 
 		if len(pageErrors) > 0 {
 			for _, err := range pageErrors {
 				result.Errors = append(result.Errors, fmt.Sprintf("page %d: %v", pageNum, err))
 			}
+		}
+	}
+
+	// Add warnings from robust parser
+	if parseResult.Errors != nil {
+		errorCount, warningCount := parseResult.Errors.Count()
+		if errorCount > 0 || warningCount > 0 {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("PDF parsing encountered %d errors and %d warnings", errorCount, warningCount))
 		}
 	}
 
@@ -176,12 +205,35 @@ func (e *DefaultEngine) Extract(req ExtractionRequest) (*ExtractionResult, error
 	return result, nil
 }
 
-// extractPageContent extracts all content from a single page
+// extractPageContentWithRecovery extracts all content from a single page with enhanced error handling
+func (e *DefaultEngine) extractPageContentWithRecovery(
+	pdfReader *pdf.Reader, pageNum int, config ExtractionConfig, filePath string,
+) ([]ContentElement, []error) {
+	// Enhanced panic recovery with detailed logging
+	defer func() {
+		if r := recover(); r != nil {
+			// Log the panic for debugging
+			fmt.Fprintf(os.Stderr, "[ExtractEngine] PANIC on page %d of %s: %v\n", pageNum, filePath, r)
+		}
+	}()
+
+	// Delegate to original method for backward compatibility
+	return e.extractPageContent(pdfReader, pageNum, config)
+}
+
+// extractPageContent extracts all content from a single page (original method)
 func (e *DefaultEngine) extractPageContent(
 	pdfReader *pdf.Reader, pageNum int, config ExtractionConfig,
 ) ([]ContentElement, []error) {
 	var elements []ContentElement
 	var errors []error
+
+	// Add panic recovery for malformed PDF streams
+	defer func() {
+		if r := recover(); r != nil {
+			errors = append(errors, fmt.Errorf("panic during page content extraction on page %d: %v", pageNum, r))
+		}
+	}()
 
 	page := pdfReader.Page(pageNum)
 	if page.V.IsNull() {
@@ -369,6 +421,13 @@ func (e *DefaultEngine) extractImagesFromPage(
 	var elements []ContentElement
 	var errors []error
 
+	// Add panic recovery for malformed PDF streams
+	defer func() {
+		if r := recover(); r != nil {
+			errors = append(errors, fmt.Errorf("panic during image extraction on page %d: %v", pageNum, r))
+		}
+	}()
+
 	// Get page resources
 	resources := page.V.Key("Resources")
 	if resources.IsNull() {
@@ -383,67 +442,82 @@ func (e *DefaultEngine) extractImagesFromPage(
 
 	imageIndex := 0
 	for _, key := range xObjects.Keys() {
-		obj := xObjects.Key(key)
-		if obj.IsNull() {
-			continue
-		}
+		// Process each XObject with individual error recovery
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					errors = append(errors, fmt.Errorf("error processing XObject '%s' on page %d: %v", key, pageNum, r))
+				}
+			}()
 
-		// Check if this XObject is an image
-		subtype := obj.Key("Subtype")
-		if subtype.IsNull() || subtype.Name() != "Image" {
-			continue
-		}
-
-		// Extract image information
-		width := int(obj.Key("Width").Int64())
-		height := int(obj.Key("Height").Int64())
-
-		// Get color space
-		colorSpace := "Unknown"
-		if cs := obj.Key("ColorSpace"); !cs.IsNull() {
-			if cs.Kind() == pdf.Name {
-				colorSpace = cs.Name()
+			obj := xObjects.Key(key)
+			if obj.IsNull() {
+				return
 			}
-		}
 
-		// Get bits per component
-		bitsPerComponent := int(obj.Key("BitsPerComponent").Int64())
-		if bitsPerComponent == 0 {
-			bitsPerComponent = 8 // Default
-		}
+			// Check if this XObject is an image
+			subtype := obj.Key("Subtype")
+			if subtype.IsNull() || subtype.Name() != "Image" {
+				return
+			}
 
-		// Create image element
-		// Note: Stream data extraction would require more complex PDF parsing
-		var imageData []byte
-		imageHash := e.generateHashFromData(imageData)
+			// Extract image information with safe access
+			width := int(obj.Key("Width").Int64())
+			height := int(obj.Key("Height").Int64())
 
-		imageElement := ContentElement{
-			ID:         e.generateID("image", pageNum, imageIndex),
-			Type:       ContentTypeImage,
-			PageNumber: pageNum,
-			BoundingBox: BoundingBox{
-				// Position would need to be calculated from the transformation matrix
-				// This is a simplified implementation
-				LowerLeft:  Coordinate{X: 0, Y: 0},
-				UpperRight: Coordinate{X: float64(width), Y: float64(height)},
-				Width:      float64(width),
-				Height:     float64(height),
-			},
-			Content: ImageElement{
-				Format:           "Unknown", // Would need to be determined from the stream
-				Width:            width,
-				Height:           height,
-				ColorSpace:       colorSpace,
-				BitsPerComponent: bitsPerComponent,
-				Data:             imageData,
-				Hash:             imageHash,
-				Size:             int64(len(imageData)),
-			},
-			Confidence: 1.0,
-		}
+			// Skip invalid dimensions
+			if width <= 0 || height <= 0 {
+				errors = append(errors, fmt.Errorf("invalid image dimensions for XObject '%s': %dx%d", key, width, height))
+				return
+			}
 
-		elements = append(elements, imageElement)
-		imageIndex++
+			// Get color space
+			colorSpace := "Unknown"
+			if cs := obj.Key("ColorSpace"); !cs.IsNull() {
+				if cs.Kind() == pdf.Name {
+					colorSpace = cs.Name()
+				}
+			}
+
+			// Get bits per component
+			bitsPerComponent := int(obj.Key("BitsPerComponent").Int64())
+			if bitsPerComponent == 0 {
+				bitsPerComponent = 8 // Default
+			}
+
+			// Create image element
+			// Note: Stream data extraction would require more complex PDF parsing
+			var imageData []byte
+			imageHash := e.generateHashFromData(imageData)
+
+			imageElement := ContentElement{
+				ID:         e.generateID("image", pageNum, imageIndex),
+				Type:       ContentTypeImage,
+				PageNumber: pageNum,
+				BoundingBox: BoundingBox{
+					// Position would need to be calculated from the transformation matrix
+					// This is a simplified implementation
+					LowerLeft:  Coordinate{X: 0, Y: 0},
+					UpperRight: Coordinate{X: float64(width), Y: float64(height)},
+					Width:      float64(width),
+					Height:     float64(height),
+				},
+				Content: ImageElement{
+					Format:           "Unknown", // Would need to be determined from the stream
+					Width:            width,
+					Height:           height,
+					ColorSpace:       colorSpace,
+					BitsPerComponent: bitsPerComponent,
+					Data:             imageData,
+					Hash:             imageHash,
+					Size:             int64(len(imageData)),
+				},
+				Confidence: 1.0,
+			}
+
+			elements = append(elements, imageElement)
+			imageIndex++
+		}()
 	}
 
 	return elements, errors
@@ -474,11 +548,47 @@ func (e *DefaultEngine) extractFormsFromPage(
 	var elements []ContentElement
 	var errors []error
 
-	// Form field extraction would require access to the AcroForm dictionary
-	// This is typically at the document level, not page level
+	// Form extraction requires document-level access
+	if e.pdfReader == nil {
+		errors = append(errors, fmt.Errorf("PDF reader not available for form extraction"))
+		return elements, errors
+	}
 
-	if e.debugMode {
-		errors = append(errors, fmt.Errorf("form extraction requires document-level AcroForm access"))
+	// Extract all forms from the document (done once)
+	// Use file-based extraction if file path is available
+	formExtractor := NewFormExtractor(e.debugMode)
+	var forms []FormField
+	var err error
+
+	if e.filePath != "" {
+		// Preferred method: extract forms using pdfcpu with full access to PDF structure
+		forms, err = formExtractor.ExtractFormsFromFile(e.filePath)
+	} else {
+		// Fallback: use heuristic extraction from pdf.Reader
+		forms, err = formExtractor.ExtractForms(e.pdfReader)
+	}
+
+	if err != nil {
+		errors = append(errors, fmt.Errorf("failed to extract forms: %w", err))
+		return elements, errors
+	}
+
+	// Filter forms for this specific page
+	for _, form := range forms {
+		if form.Page == pageNum {
+			element := ContentElement{
+				Type:       ContentTypeForm,
+				PageNumber: pageNum,
+				Confidence: estimatedConfidenceThreshold,
+				Content: FormElement{
+					Field: form,
+				},
+			}
+			if form.Bounds != nil {
+				element.BoundingBox = *form.Bounds
+			}
+			elements = append(elements, element)
+		}
 	}
 
 	return elements, errors
@@ -723,28 +833,183 @@ func (e *DefaultEngine) determinePagesToProcess(requestedPages []int, totalPages
 }
 
 func (e *DefaultEngine) getPageInfo(page pdf.Page, pageNum int) (*PageInfo, error) {
-	// Get page dimensions from MediaBox
-	mediaBox := page.V.Key("MediaBox")
-	if mediaBox.IsNull() || mediaBox.Kind() != pdf.Array || mediaBox.Len() < 4 {
-		return nil, fmt.Errorf("invalid MediaBox")
+	// Try to extract MediaBox with robust error handling
+	mediaBox, err := e.extractMediaBox(page)
+	if err != nil {
+		// Log the error but continue with default dimensions
+		fmt.Fprintf(os.Stderr, "[MediaBox] Failed to extract MediaBox for page %d: %v\n", pageNum, err)
+
+		// Use default US Letter size
+		mediaBox = &BoundingBox{
+			LowerLeft:  Coordinate{X: 0, Y: 0},
+			UpperRight: Coordinate{X: 612, Y: 792},
+			Width:      612.0,
+			Height:     792.0,
+		}
+		fmt.Fprintf(os.Stderr, "[MediaBox] Using default dimensions for page %d\n", pageNum)
 	}
 
-	llx := mediaBox.Index(0).Float64()
-	lly := mediaBox.Index(1).Float64()
-	urx := mediaBox.Index(2).Float64()
-	ury := mediaBox.Index(3).Float64()
-
 	return &PageInfo{
-		Number: pageNum,
-		Width:  urx - llx,
-		Height: ury - lly,
-		MediaBox: BoundingBox{
-			LowerLeft:  Coordinate{X: llx, Y: lly},
-			UpperRight: Coordinate{X: urx, Y: ury},
-			Width:      urx - llx,
-			Height:     ury - lly,
-		},
+		Number:   pageNum,
+		Width:    mediaBox.Width,
+		Height:   mediaBox.Height,
+		MediaBox: *mediaBox,
 	}, nil
+}
+
+// extractMediaBox extracts MediaBox with robust error handling and inheritance support
+func (e *DefaultEngine) extractMediaBox(page pdf.Page) (*BoundingBox, error) {
+	// Enhanced MediaBox extraction with better error handling
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "[MediaBox] PANIC during MediaBox extraction: %v\n", r)
+		}
+	}()
+
+	// Try direct MediaBox extraction first
+	mediaBox := page.V.Key("MediaBox")
+	if !mediaBox.IsNull() {
+		if bbox, err := e.parseMediaBoxValue(mediaBox); err == nil {
+			return bbox, nil
+		} else {
+			fmt.Fprintf(os.Stderr, "[MediaBox] Direct extraction failed: %v\n", err)
+		}
+	}
+
+	// Try inheritance from parent pages
+	if inheritedBox := e.getInheritedMediaBox(page); inheritedBox != nil {
+		return inheritedBox, nil
+	}
+
+	return nil, fmt.Errorf("no valid MediaBox found")
+}
+
+// parseMediaBoxValue parses a MediaBox PDF value into a BoundingBox with enhanced error handling
+func (e *DefaultEngine) parseMediaBoxValue(mediaBox pdf.Value) (*BoundingBox, error) {
+	// Add panic recovery for corrupted MediaBox data
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "[MediaBox] PANIC during MediaBox parsing: %v\n", r)
+		}
+	}()
+
+	if mediaBox.IsNull() {
+		return nil, fmt.Errorf("MediaBox value is null")
+	}
+
+	if mediaBox.Kind() != pdf.Array {
+		return nil, fmt.Errorf("MediaBox is not an array: %v", mediaBox.Kind())
+	}
+
+	if mediaBox.Len() != 4 {
+		return nil, fmt.Errorf("invalid MediaBox array length: %d, expected 4", mediaBox.Len())
+	}
+
+	coords := make([]float64, 4)
+	for i := 0; i < 4; i++ {
+		val := mediaBox.Index(i)
+		if val.IsNull() {
+			return nil, fmt.Errorf("coordinate at index %d is null", i)
+		}
+
+		// Enhanced numeric type handling with better error recovery
+		switch val.Kind() {
+		case pdf.Integer:
+			coords[i] = float64(val.Int64())
+		case pdf.Real:
+			coords[i] = val.Float64()
+		default:
+			// Try to extract numeric value as string fallback
+			if str := val.Text(); str != "" {
+				if f, err := parseFloatValue(str); err == nil {
+					coords[i] = f
+					fmt.Fprintf(os.Stderr, "[MediaBox] WARNING: Recovered coordinate %d from string: %s\n", i, str)
+				} else {
+					return nil, fmt.Errorf("invalid coordinate type at index %d: %v (failed string conversion)", i, val.Kind())
+				}
+			} else {
+				return nil, fmt.Errorf("invalid coordinate type at index %d: %v", i, val.Kind())
+			}
+		}
+	}
+
+	llx, lly, urx, ury := coords[0], coords[1], coords[2], coords[3]
+
+	// Validate rectangle dimensions with more tolerance
+	if urx <= llx || ury <= lly {
+		// Try to fix inverted coordinates
+		if llx > urx {
+			llx, urx = urx, llx
+			fmt.Fprintf(os.Stderr, "[MediaBox] WARNING: Fixed inverted X coordinates\n")
+		}
+		if lly > ury {
+			lly, ury = ury, lly
+			fmt.Fprintf(os.Stderr, "[MediaBox] WARNING: Fixed inverted Y coordinates\n")
+		}
+
+		// If still invalid, return error
+		if urx <= llx || ury <= lly {
+			return nil, fmt.Errorf("invalid MediaBox dimensions: [%.2f %.2f %.2f %.2f]", llx, lly, urx, ury)
+		}
+	}
+
+	return &BoundingBox{
+		LowerLeft:  Coordinate{X: llx, Y: lly},
+		UpperRight: Coordinate{X: urx, Y: ury},
+		Width:      urx - llx,
+		Height:     ury - lly,
+	}, nil
+}
+
+// parseFloatValue attempts to parse a string as a float64 with fallback handling
+func parseFloatValue(s string) (float64, error) {
+	// Try standard parsing first
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f, nil
+	}
+
+	// Try parsing with common PDF number formats
+	s = strings.TrimSpace(s)
+	if strings.HasSuffix(s, "f") || strings.HasSuffix(s, "F") {
+		s = s[:len(s)-1]
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return f, nil
+		}
+	}
+
+	return 0, fmt.Errorf("unable to parse '%s' as float", s)
+}
+
+// getInheritedMediaBox traverses up the page tree to find an inherited MediaBox
+func (e *DefaultEngine) getInheritedMediaBox(page pdf.Page) *BoundingBox {
+	current := page.V
+
+	// Look for Parent reference and traverse up the tree
+	for i := 0; i < 10; i++ { // Limit iterations to prevent infinite loops
+		parent := current.Key("Parent")
+		if parent.IsNull() {
+			break
+		}
+
+		// Check if parent has MediaBox
+		if mediaBox := parent.Key("MediaBox"); !mediaBox.IsNull() {
+			if bbox, err := e.parseMediaBoxValue(mediaBox); err == nil {
+				fmt.Fprintf(os.Stderr, "[MediaBox] Using inherited MediaBox: %.2fx%.2f\n", bbox.Width, bbox.Height)
+				return bbox
+			}
+		}
+
+		// Move up to the next parent
+		current = parent
+	}
+
+	// Return default US Letter size if no inheritance found
+	return &BoundingBox{
+		LowerLeft:  Coordinate{X: 0, Y: 0},
+		UpperRight: Coordinate{X: 612, Y: 792},
+		Width:      612.0,
+		Height:     792.0,
+	}
 }
 
 func (e *DefaultEngine) generateID(prefix string, pageNum, index int) string {

@@ -1,0 +1,39 @@
+# Task ID: 5
+# Title: Develop Line and Paragraph Detection Algorithms
+# Status: done
+# Dependencies: 4
+# Priority: medium
+# Description: Implement intelligent grouping of positioned text into logical lines and paragraphs based on spatial analysis and proximity
+# Details:
+Group text elements into semantic units:
+
+```go
+// internal/extractors/layout.go
+type LineDetector struct {
+    tolerance float64 // Y-axis tolerance for same line
+}
+
+func (ld *LineDetector) GroupIntoLines(texts []ExtractedText) []TextLine {
+    // Sort by Y coordinate (top to bottom)
+    // Group texts with similar Y values
+    // Sort each line by X coordinate
+    // Handle RTL text if needed
+}
+
+type ParagraphDetector struct {
+    lineSpacing float64
+    indentSize  float64
+}
+
+func (pd *ParagraphDetector) GroupIntoParagraphs(lines []TextLine) []Paragraph {
+    // Analyze line spacing
+    // Detect paragraph breaks
+    // Identify indentation patterns
+    // Group related lines
+}
+```
+
+Enhance pdf_extract_structured output with line/paragraph information.
+
+# Test Strategy:
+Test with documents having various layouts: multi-column, mixed fonts, different line spacings. Verify correct paragraph detection and line ordering.

@@ -1,0 +1,360 @@
+# Task ID: 37
+# Title: Implement PDF 1.4 Transparency Model
+# Status: pending
+# Dependencies: 2, 3, 4, 36
+# Priority: high
+# Description: Add complete transparency support including transparency groups, blend modes (Normal, Multiply, Screen, Overlay, etc.), opacity/alpha channels, soft masks, and compositing model. This is the major new feature in PDF 1.4 and critical for full compliance.
+# Details:
+Implement a comprehensive PDF 1.4 transparency model that supports all transparency features according to PDF 1.4/1.7 specifications (Chapter 11):
+
+```go
+// internal/pdf/transparency/model.go
+package transparency
+
+import (
+    "fmt"
+    "math"
+    "github.com/yourusername/pdfextract/internal/pdf/color"
+)
+
+type TransparencyModel struct {
+    colorSpace    color.ColorSpace
+    blendMode     BlendMode
+    groupStack    []*TransparencyGroup
+    softMaskStack []*SoftMask
+}
+
+type BlendMode int
+
+const (
+    BlendNormal BlendMode = iota
+    BlendMultiply
+    BlendScreen
+    BlendOverlay
+    BlendDarken
+    BlendLighten
+    BlendColorDodge
+    BlendColorBurn
+    BlendHardLight
+    BlendSoftLight
+    BlendDifference
+    BlendExclusion
+    BlendHue
+    BlendSaturation
+    BlendColor
+    BlendLuminosity
+)
+
+// Transparency group for isolated/knockout rendering
+type TransparencyGroup struct {
+    ColorSpace    color.ColorSpace
+    Isolated      bool
+    Knockout      bool
+    BlendMode     BlendMode
+    Alpha         float64
+    SoftMask      *SoftMask
+    BoundingBox   *Rectangle
+    BackdropColor []float64
+}
+
+// Soft mask for alpha/luminosity masking
+type SoftMask struct {
+    Type          SoftMaskType // Alpha or Luminosity
+    Group         *TransparencyGroup
+    BackdropColor []float64
+    TransferFunc  TransferFunction
+}
+
+type SoftMaskType int
+
+const (
+    SoftMaskAlpha SoftMaskType = iota
+    SoftMaskLuminosity
+)
+
+// internal/pdf/transparency/blending.go
+package transparency
+
+// Implement all PDF blend modes according to PDF 1.4 spec
+func (tm *TransparencyModel) Blend(backdrop, source []float64, alpha float64, mode BlendMode) []float64 {
+    switch mode {
+    case BlendNormal:
+        return tm.blendNormal(backdrop, source, alpha)
+    case BlendMultiply:
+        return tm.blendMultiply(backdrop, source, alpha)
+    case BlendScreen:
+        return tm.blendScreen(backdrop, source, alpha)
+    case BlendOverlay:
+        return tm.blendOverlay(backdrop, source, alpha)
+    // ... implement all 16 blend modes
+    }
+}
+
+func (tm *TransparencyModel) blendNormal(backdrop, source []float64, alpha float64) []float64 {
+    result := make([]float64, len(backdrop))
+    for i := range backdrop {
+        result[i] = (1-alpha)*backdrop[i] + alpha*source[i]
+    }
+    return result
+}
+
+func (tm *TransparencyModel) blendMultiply(backdrop, source []float64, alpha float64) []float64 {
+    result := make([]float64, len(backdrop))
+    for i := range backdrop {
+        result[i] = (1-alpha)*backdrop[i] + alpha*(backdrop[i]*source[i])
+    }
+    return result
+}
+
+// internal/pdf/transparency/compositor.go
+package transparency
+
+type Compositor struct {
+    model         *TransparencyModel
+    deviceBuffer  *DeviceBuffer
+    groupStack    []*GroupBuffer
+    alphaConstant float64
+    shapeAlpha    float64
+}
+
+// Composite a transparency group onto the backdrop
+func (c *Compositor) CompositeGroup(group *TransparencyGroup, content func()) error {
+    // 1. Create group buffer
+    groupBuffer := c.createGroupBuffer(group)
+    
+    // 2. Push group onto stack
+    c.groupStack = append(c.groupStack, groupBuffer)
+    
+    // 3. Initialize group with backdrop if not isolated
+    if !group.Isolated {
+        c.initializeBackdrop(groupBuffer)
+    }
+    
+    // 4. Render content into group
+    content()
+    
+    // 5. Apply soft mask if present
+    if group.SoftMask != nil {
+        c.applySoftMask(groupBuffer, group.SoftMask)
+    }
+    
+    // 6. Composite group onto parent with blend mode
+    c.compositeToParent(groupBuffer, group.BlendMode, group.Alpha)
+    
+    // 7. Pop group from stack
+    c.groupStack = c.groupStack[:len(c.groupStack)-1]
+    
+    return nil
+}
+
+// internal/pdf/transparency/parser.go
+package transparency
+
+import (
+    "github.com/yourusername/pdfextract/internal/pdf"
+)
+
+type TransparencyParser struct {
+    resolver pdf.ObjectResolver
+}
+
+// Parse ExtGState dictionary for transparency parameters
+func (tp *TransparencyParser) ParseExtGState(dict map[string]pdf.Object) (*GraphicsState, error) {
+    gs := &GraphicsState{}
+    
+    // Parse blend mode
+    if bm, ok := dict["BM"]; ok {
+        gs.BlendMode = tp.parseBlendMode(bm)
+    }
+    
+    // Parse constant alpha
+    if ca, ok := dict["ca"]; ok {
+        gs.StrokeAlpha = pdf.GetFloat(ca)
+    }
+    if CA, ok := dict["CA"]; ok {
+        gs.FillAlpha = pdf.GetFloat(CA)
+    }
+    
+    // Parse soft mask
+    if smask, ok := dict["SMask"]; ok {
+        gs.SoftMask = tp.parseSoftMask(smask)
+    }
+    
+    // Parse alpha source flag
+    if ais, ok := dict["AIS"]; ok {
+        gs.AlphaIsShape = pdf.GetBool(ais)
+    }
+    
+    return gs, nil
+}
+
+// Parse transparency group from Page or Form XObject
+func (tp *TransparencyParser) ParseTransparencyGroup(dict map[string]pdf.Object) (*TransparencyGroup, error) {
+    group, ok := dict["Group"].(map[string]pdf.Object)
+    if !ok {
+        return nil, nil
+    }
+    
+    tg := &TransparencyGroup{}
+    
+    // Check it's a transparency group
+    if s, ok := group["S"]; ok && pdf.GetName(s) != "Transparency" {
+        return nil, nil
+    }
+    
+    // Parse color space
+    if cs, ok := group["CS"]; ok {
+        tg.ColorSpace = tp.parseColorSpace(cs)
+    }
+    
+    // Parse isolation flag
+    if i, ok := group["I"]; ok {
+        tg.Isolated = pdf.GetBool(i)
+    }
+    
+    // Parse knockout flag
+    if k, ok := group["K"]; ok {
+        tg.Knockout = pdf.GetBool(k)
+    }
+    
+    return tg, nil
+}
+
+// internal/pdf/transparency/state.go
+package transparency
+
+// Graphics state with transparency parameters
+type GraphicsState struct {
+    BlendMode    BlendMode
+    FillAlpha    float64
+    StrokeAlpha  float64
+    AlphaIsShape bool
+    SoftMask     *SoftMask
+}
+
+// State machine for tracking transparency state during rendering
+type TransparencyStateMachine struct {
+    stateStack []*GraphicsState
+    current    *GraphicsState
+}
+
+func (tsm *TransparencyStateMachine) Save() {
+    state := *tsm.current
+    tsm.stateStack = append(tsm.stateStack, &state)
+}
+
+func (tsm *TransparencyStateMachine) Restore() error {
+    if len(tsm.stateStack) == 0 {
+        return fmt.Errorf("state stack underflow")
+    }
+    tsm.current = tsm.stateStack[len(tsm.stateStack)-1]
+    tsm.stateStack = tsm.stateStack[:len(tsm.stateStack)-1]
+    return nil
+}
+
+// internal/pdf/transparency/renderer.go
+package transparency
+
+// Integration with content stream rendering
+type TransparencyRenderer struct {
+    compositor *Compositor
+    state      *TransparencyStateMachine
+    parser     *TransparencyParser
+}
+
+// Handle transparency-related operators in content stream
+func (tr *TransparencyRenderer) HandleOperator(op string, operands []pdf.Object) error {
+    switch op {
+    case "gs": // Set graphics state with ExtGState
+        name := pdf.GetName(operands[0])
+        extGState := tr.getExtGState(name)
+        return tr.applyExtGState(extGState)
+        
+    case "BM": // Set blend mode (inline)
+        mode := tr.parser.parseBlendMode(operands[0])
+        tr.state.current.BlendMode = mode
+        
+    case "ca": // Set stroke alpha
+        tr.state.current.StrokeAlpha = pdf.GetFloat(operands[0])
+        
+    case "CA": // Set fill alpha
+        tr.state.current.FillAlpha = pdf.GetFloat(operands[0])
+    }
+    return nil
+}
+
+// Render a Form XObject with potential transparency group
+func (tr *TransparencyRenderer) RenderFormXObject(xobj *FormXObject) error {
+    // Check if it has a transparency group
+    group := tr.parser.ParseTransparencyGroup(xobj.Dict)
+    
+    if group != nil {
+        // Render as transparency group
+        return tr.compositor.CompositeGroup(group, func() {
+            tr.renderContentStream(xobj.Stream)
+        })
+    } else {
+        // Render normally
+        return tr.renderContentStream(xobj.Stream)
+    }
+}
+
+# Test Strategy:
+Comprehensive testing strategy for PDF 1.4 transparency model:
+
+1. **Blend Mode Tests**:
+   - Test all 16 blend modes with known input/output values from PDF specification
+   - Verify Normal mode: result = (1-α)×backdrop + α×source
+   - Verify Multiply mode: result = backdrop × source
+   - Test Screen mode: result = backdrop + source - backdrop×source
+   - Test Overlay mode combines Multiply and Screen based on backdrop
+   - Verify separable vs non-separable blend modes
+   - Test with grayscale, RGB, and CMYK color spaces
+
+2. **Alpha Channel Tests**:
+   - Test constant alpha (ca/CA) application to strokes and fills
+   - Verify shape vs opacity alpha distinction
+   - Test alpha compositing formula: αr = αb + αs - αb×αs
+   - Test with various alpha values (0.0, 0.5, 1.0)
+   - Verify proper alpha premultiplication
+
+3. **Transparency Group Tests**:
+   - Test isolated groups (no backdrop contribution)
+   - Test non-isolated groups (backdrop shows through)
+   - Test knockout groups (objects knock out backdrop)
+   - Test nested transparency groups
+   - Verify group color space conversion
+   - Test groups with soft masks applied
+
+4. **Soft Mask Tests**:
+   - Test alpha soft masks (use alpha channel)
+   - Test luminosity soft masks (convert to grayscale)
+   - Test soft mask with transfer function
+   - Test backdrop color handling
+   - Verify mask clipping to group bounds
+
+5. **Integration Tests**:
+   - Test with PDF 1.4 specification examples (Annex G)
+   - Test transparency groups in Form XObjects
+   - Test transparency on different page backgrounds
+   - Test interaction with different color spaces
+   - Verify state save/restore preserves transparency settings
+
+6. **Performance Tests**:
+   - Benchmark compositing operations
+   - Test memory usage with complex transparency stacks
+   - Verify efficient buffer management
+   - Test with documents containing many transparent objects
+
+7. **Parser Tests**:
+   - Test ExtGState dictionary parsing
+   - Test Group dictionary parsing from Page/XObject
+   - Test handling of missing/invalid transparency parameters
+   - Verify backward compatibility with non-transparent PDFs
+
+8. **Edge Cases**:
+   - Test with invalid blend mode names
+   - Test alpha values outside [0,1] range
+   - Test empty transparency groups
+   - Test circular soft mask references
+   - Test state stack underflow/overflow

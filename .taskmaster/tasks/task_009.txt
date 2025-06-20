@@ -1,0 +1,38 @@
+# Task ID: 9
+# Title: Implement Advanced Query Engine
+# Status: done
+# Dependencies: 6, 8
+# Priority: low
+# Description: Build a query system that allows searching and filtering PDF content by type, position, formatting, and text patterns
+# Details:
+Create flexible query interface:
+
+```go
+// internal/query/engine.go
+type QueryEngine struct {
+    index ContentIndex
+}
+
+type Query struct {
+    Type      string      `json:"type,omitempty"` // text, image, table
+    Pattern   string      `json:"pattern,omitempty"`
+    Page      *int        `json:"page,omitempty"`
+    Region    *BoundingBox `json:"region,omitempty"`
+    FontSize  *float64    `json:"fontSize,omitempty"`
+}
+
+func (qe *QueryEngine) Query(doc *PDFDocument, query Query) ([]QueryResult, error) {
+    // Parse query parameters
+    // Filter by content type
+    // Apply spatial filters
+    // Match text patterns
+    // Score and rank results
+}
+
+// Support regex patterns, fuzzy matching, proximity search
+```
+
+Implement pdf_query_content MCP tool.
+
+# Test Strategy:
+Test various query combinations: spatial queries, pattern matching, multi-criteria filters. Verify performance with large documents. Test edge cases and invalid queries.

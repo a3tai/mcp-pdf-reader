@@ -1,0 +1,38 @@
+# Task ID: 1
+# Title: Setup Go Project Structure and MCP Server Foundation
+# Status: done
+# Dependencies: None
+# Priority: high
+# Description: Initialize the Go project with proper module structure, implement basic MCP server protocol handler, and establish the core architecture for PDF processing
+# Details:
+Create Go module with go.mod (require go 1.21+). Implement MCP server following the Model Context Protocol specification:
+
+```go
+// main.go
+package main
+
+import (
+    "github.com/yourusername/mcp-pdf-reader/internal/server"
+    "github.com/yourusername/mcp-pdf-reader/internal/pdf"
+)
+
+// internal/server/mcp.go
+type MCPServer struct {
+    pdfEngine *pdf.Engine
+    tools     map[string]Tool
+}
+
+// Implement MCP protocol methods: Initialize, ListTools, CallTool
+```
+
+Setup directory structure:
+- /cmd/mcp-pdf-reader/
+- /internal/server/ (MCP protocol handling)
+- /internal/pdf/ (PDF processing engine)
+- /internal/extractors/ (content extractors)
+- /pkg/models/ (data models)
+- /docs/examples/ (test PDFs)
+- /test/
+
+# Test Strategy:
+Unit tests for MCP message handling, integration tests for server startup/shutdown, validate tool registration and basic protocol compliance. Test with mock PDF operations to ensure server responds correctly to MCP requests.

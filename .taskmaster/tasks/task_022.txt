@@ -1,0 +1,238 @@
+# Task ID: 22
+# Title: Implement Page-Range Extraction Tools for Large PDFs
+# Status: done
+# Dependencies: 19, 13, 4
+# Priority: high
+# Description: Create specialized tools that enable efficient extraction of content from specific page ranges in large PDF documents without loading the entire file into memory, leveraging streaming techniques and selective parsing.
+# Details:
+Implement a comprehensive page-range extraction system that builds upon the streaming infrastructure:
+
+```go
+// internal/pdf/pagerange/extractor.go
+package pagerange
+
+import (
+    "github.com/yourusername/pdfextract/internal/pdf/streaming"
+    "github.com/yourusername/pdfextract/internal/pdf/wrapper"
+)
+
+type PageRangeExtractor struct {
+    streamParser *streaming.StreamParser
+    pageIndex    *PageIndex
+    cache        *PageObjectCache
+}
+
+type PageRange struct {
+    Start int `json:"start"`
+    End   int `json:"end"`
+}
+
+func (pre *PageRangeExtractor) ExtractRange(reader io.ReadSeeker, ranges []PageRange, options ExtractOptions) (*ExtractedContent, error) {
+    // 1. Build minimal page index without parsing all pages
+    if err := pre.buildPageIndex(reader); err != nil {
+        return nil, fmt.Errorf("failed to build page index: %w", err)
+    }
+    
+    // 2. Calculate required objects for requested pages
+    requiredObjects := pre.calculateRequiredObjects(ranges)
+    
+    // 3. Stream parse only necessary objects
+    content := &ExtractedContent{
+        Pages: make(map[int]*PageContent),
+    }
+    
+    for _, objID := range requiredObjects {
+        obj, err := pre.streamParser.ParseObject(reader, objID)
+        if err != nil {
+            return nil, fmt.Errorf("failed to parse object %d: %w", objID, err)
+        }
+        pre.cache.Put(objID, obj)
+    }
+    
+    // 4. Extract content from specific pages
+    for _, r := range ranges {
+        for page := r.Start; page <= r.End && page <= pre.pageIndex.TotalPages; page++ {
+            pageContent, err := pre.extractPageContent(page)
+            if err != nil {
+                return nil, fmt.Errorf("failed to extract page %d: %w", page, err)
+            }
+            content.Pages[page] = pageContent
+        }
+    }
+    
+    return content, nil
+}
+
+// internal/pdf/pagerange/index.go
+type PageIndex struct {
+    TotalPages   int
+    PageOffsets  map[int]int64      // Page number -> file offset
+    PageObjects  map[int]ObjectRef  // Page number -> object reference
+    Resources    map[int][]ObjectRef // Page number -> required resources
+}
+
+func (pre *PageRangeExtractor) buildPageIndex(reader io.ReadSeeker) error {
+    // Parse only page tree structure
+    catalog, err := pre.streamParser.ParseCatalog(reader)
+    if err != nil {
+        return err
+    }
+    
+    // Walk page tree to build index
+    pre.pageIndex = &PageIndex{
+        PageOffsets: make(map[int]int64),
+        PageObjects: make(map[int]ObjectRef),
+        Resources:   make(map[int][]ObjectRef),
+    }
+    
+    return pre.walkPageTree(reader, catalog.Pages, 1)
+}
+
+// internal/tools/extract_page_range.go
+type ExtractPageRangeTool struct {
+    extractor *pagerange.PageRangeExtractor
+    wrapper   wrapper.PDFLibrary
+}
+
+func (t *ExtractPageRangeTool) Execute(args map[string]interface{}) (interface{}, error) {
+    filePath := args["file"].(string)
+    ranges := parseRanges(args["ranges"])
+    contentTypes := args["content_types"].([]string) // text, images, forms, etc.
+    
+    // Open file for streaming
+    file, err := os.Open(filePath)
+    if err != nil {
+        return nil, err
+    }
+    defer file.Close()
+    
+    // Extract specified content from page ranges
+    options := pagerange.ExtractOptions{
+        ContentTypes: contentTypes,
+        PreserveFormatting: args["preserve_formatting"].(bool),
+        IncludeMetadata: args["include_metadata"].(bool),
+    }
+    
+    content, err := t.extractor.ExtractRange(file, ranges, options)
+    if err != nil {
+        return nil, err
+    }
+    
+    return content, nil
+}
+
+// internal/pdf/pagerange/cache.go
+type PageObjectCache struct {
+    objects  map[ObjectRef]*CachedObject
+    size     int64
+    maxSize  int64
+    lru      *list.List
+    mu       sync.RWMutex
+}
+
+type CachedObject struct {
+    ref      ObjectRef
+    data     interface{}
+    size     int64
+    accessed time.Time
+    element  *list.Element
+}
+
+// Implement LRU eviction when cache exceeds maxSize
+func (c *PageObjectCache) Put(ref ObjectRef, obj interface{}) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    
+    objSize := calculateObjectSize(obj)
+    
+    // Evict if necessary
+    for c.size+objSize > c.maxSize && c.lru.Len() > 0 {
+        c.evictOldest()
+    }
+    
+    // Add new object
+    cached := &CachedObject{
+        ref:      ref,
+        data:     obj,
+        size:     objSize,
+        accessed: time.Now(),
+    }
+    
+    cached.element = c.lru.PushFront(cached)
+    c.objects[ref] = cached
+    c.size += objSize
+}
+
+// Support for complex page range specifications
+func parseRanges(input interface{}) []PageRange {
+    // Support formats like:
+    // "1-5,10,15-20"
+    // ["1-5", "10", "15-20"]
+    // [{"start": 1, "end": 5}, {"start": 10, "end": 10}]
+}
+
+// Memory-efficient content aggregation
+type ExtractedContent struct {
+    Pages    map[int]*PageContent `json:"pages"`
+    Metadata *DocumentMetadata    `json:"metadata,omitempty"`
+}
+
+type PageContent struct {
+    Number     int                    `json:"number"`
+    Text       []ExtractedText        `json:"text,omitempty"`
+    Images     []ExtractedImage       `json:"images,omitempty"`
+    Forms      []FormField            `json:"forms,omitempty"`
+    Tables     []ExtractedTable       `json:"tables,omitempty"`
+    Bounds     BoundingBox            `json:"bounds"`
+}
+```
+
+Key implementation considerations:
+
+1. **Efficient page indexing**: Build a lightweight index of page locations without parsing content
+2. **Selective object loading**: Only load PDF objects required for requested pages
+3. **Resource sharing**: Handle shared resources (fonts, images) efficiently across pages
+4. **Memory management**: Use bounded caches with LRU eviction
+5. **Flexible range specification**: Support various input formats for page ranges
+6. **Content type filtering**: Allow extraction of specific content types only
+7. **Progress reporting**: For large ranges, provide progress callbacks
+8. **Error recovery**: Handle corrupted pages gracefully without failing entire extraction
+
+# Test Strategy:
+Comprehensive testing strategy for page-range extraction:
+
+1. **Performance benchmarks**:
+   - Test extraction of single page from 1000+ page PDF
+   - Measure memory usage stays constant regardless of PDF size
+   - Compare extraction time for first, middle, and last pages
+   - Verify no unnecessary object parsing occurs
+
+2. **Range specification tests**:
+   - Test various range formats: "1-5", "1,3,5", "10-", "-10"
+   - Test overlapping ranges: "1-5,3-7"
+   - Test invalid ranges: negative numbers, out of bounds
+   - Test edge cases: empty ranges, single page
+
+3. **Memory efficiency tests**:
+   - Monitor memory with runtime.MemStats during extraction
+   - Test with 1GB+ PDFs extracting small page ranges
+   - Verify cache eviction when memory limit reached
+   - Test concurrent extractions from same file
+
+4. **Content accuracy tests**:
+   - Extract known pages and compare with full document extraction
+   - Verify all content types extracted correctly (text, images, forms)
+   - Test pages with shared resources (fonts used across pages)
+   - Validate coordinate systems remain accurate
+
+5. **Integration tests**:
+   - Test with streaming parser for large files
+   - Test with different PDF backends (pdfcpu, ledongthuc)
+   - Test as MCP tool with various parameter combinations
+   - Verify proper error messages for user-facing tool
+
+6. **Edge case tests**:
+   - PDFs with non-sequential page objects
+   - Encrypted PDFs with page-level permissions
+   - PDFs with complex page trees (nested, inherited resources)
+   - Corrupted PDFs with damaged page objects

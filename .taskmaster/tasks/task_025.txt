@@ -1,0 +1,229 @@
+# Task ID: 25
+# Title: Fix pdf_get_page_info Tool Page Count and Dimension Extraction
+# Status: done
+# Dependencies: 2, 3, 4
+# Priority: high
+# Description: Debug and fix the pdf_get_page_info tool that returns incorrect page counts (0 pages) for multi-page documents and fails to extract page dimensions and layout information, making page analysis unreliable.
+# Details:
+Investigate and fix the broken pdf_get_page_info tool by debugging the page enumeration and dimension extraction logic:
+
+```go
+// cmd/pdf_get_page_info/main.go
+// Add comprehensive debugging to identify the root cause
+func getPageInfo(pdfPath string) (*PageInfo, error) {
+    log.Printf("Getting page info for: %s", pdfPath)
+    
+    // Step 1: Debug PDF parsing and page tree traversal
+    parser := pdf.NewParser()
+    doc, err := parser.Parse(pdfPath)
+    if err != nil {
+        return nil, fmt.Errorf("failed to parse PDF: %w", err)
+    }
+    
+    // Step 2: Fix page count extraction
+    pageCount, err := doc.GetPageCount()
+    log.Printf("Raw page count from catalog: %d", pageCount)
+    
+    // Check if Pages tree is being traversed correctly
+    pagesDict := doc.Catalog.Get("Pages")
+    if pagesDict == nil {
+        log.Printf("ERROR: Pages dictionary not found in catalog")
+        return nil, errors.New("invalid PDF structure: missing Pages")
+    }
+    
+    // Recursively count pages in the page tree
+    actualCount := countPagesRecursive(pagesDict)
+    log.Printf("Recursive page count: %d", actualCount)
+}
+
+// internal/pdf/pageinfo/extractor.go
+package pageinfo
+
+type PageInfoExtractor struct {
+    parser *pdf.Parser
+    cache  map[int]*PageDimensions
+}
+
+func (pie *PageInfoExtractor) ExtractPageInfo(doc *PDFDocument) (*DocumentPageInfo, error) {
+    info := &DocumentPageInfo{
+        TotalPages: 0,
+        Pages:      make([]PageDimensions, 0),
+    }
+    
+    // Fix 1: Properly traverse the page tree
+    pageTree := doc.Catalog.GetDict("Pages")
+    if pageTree == nil {
+        return nil, errors.New("no page tree found")
+    }
+    
+    // Get count from Pages dictionary
+    if count := pageTree.GetInt("Count"); count != nil {
+        info.TotalPages = *count
+        log.Printf("Page count from Pages dict: %d", *count)
+    }
+    
+    // Fix 2: Recursively collect all page objects
+    pages, err := pie.collectPages(pageTree)
+    if err != nil {
+        return nil, fmt.Errorf("failed to collect pages: %w", err)
+    }
+    
+    // Fix 3: Extract dimensions for each page
+    for i, pageObj := range pages {
+        dims, err := pie.extractPageDimensions(pageObj, i+1)
+        if err != nil {
+            log.Printf("Warning: failed to extract dimensions for page %d: %v", i+1, err)
+            // Use default dimensions as fallback
+            dims = &PageDimensions{
+                PageNumber: i + 1,
+                Width:      612.0,  // Letter width in points
+                Height:     792.0,  // Letter height in points
+                Rotation:   0,
+            }
+        }
+        info.Pages = append(info.Pages, *dims)
+    }
+    
+    return info, nil
+}
+
+func (pie *PageInfoExtractor) collectPages(node PDFObject) ([]PDFObject, error) {
+    pages := []PDFObject{}
+    
+    nodeType := node.GetName("Type")
+    if nodeType == "Pages" {
+        // This is a Pages node, recursively collect from Kids
+        kids := node.GetArray("Kids")
+        if kids == nil {
+            return nil, errors.New("Pages node missing Kids array")
+        }
+        
+        for _, kid := range kids {
+            // Resolve indirect references
+            if ref, ok := kid.(PDFReference); ok {
+                kid = pie.parser.ResolveReference(ref)
+            }
+            
+            childPages, err := pie.collectPages(kid)
+            if err != nil {
+                return nil, err
+            }
+            pages = append(pages, childPages...)
+        }
+    } else if nodeType == "Page" {
+        // This is a leaf Page node
+        pages = append(pages, node)
+    }
+    
+    return pages, nil
+}
+
+func (pie *PageInfoExtractor) extractPageDimensions(pageObj PDFObject, pageNum int) (*PageDimensions, error) {
+    dims := &PageDimensions{
+        PageNumber: pageNum,
+    }
+    
+    // Fix 4: Handle inherited MediaBox from parent Pages nodes
+    mediaBox := pie.getInheritedRectangle(pageObj, "MediaBox")
+    if mediaBox == nil {
+        return nil, errors.New("no MediaBox found")
+    }
+    
+    // MediaBox format: [llx lly urx ury]
+    if len(mediaBox) != 4 {
+        return nil, fmt.Errorf("invalid MediaBox format: %v", mediaBox)
+    }
+    
+    dims.Width = mediaBox[2] - mediaBox[0]
+    dims.Height = mediaBox[3] - mediaBox[1]
+    
+    // Fix 5: Check for CropBox (visible area)
+    cropBox := pie.getInheritedRectangle(pageObj, "CropBox")
+    if cropBox != nil && len(cropBox) == 4 {
+        dims.CropBox = &Rectangle{
+            X:      cropBox[0],
+            Y:      cropBox[1],
+            Width:  cropBox[2] - cropBox[0],
+            Height: cropBox[3] - cropBox[1],
+        }
+    }
+    
+    // Fix 6: Handle page rotation
+    rotation := pie.getInheritedInt(pageObj, "Rotate")
+    if rotation != nil {
+        dims.Rotation = *rotation % 360
+        // Swap dimensions for 90/270 degree rotations
+        if dims.Rotation == 90 || dims.Rotation == 270 {
+            dims.Width, dims.Height = dims.Height, dims.Width
+        }
+    }
+    
+    return dims, nil
+}
+
+// Helper to get inherited values from parent Pages nodes
+func (pie *PageInfoExtractor) getInheritedRectangle(pageObj PDFObject, key string) []float64 {
+    // Check current page first
+    if rect := pageObj.GetArray(key); rect != nil {
+        return pie.parseRectangle(rect)
+    }
+    
+    // Check parent Pages nodes
+    parent := pageObj.GetDict("Parent")
+    if parent != nil {
+        return pie.getInheritedRectangle(parent, key)
+    }
+    
+    return nil
+}
+
+// pkg/models/pageinfo.go
+type DocumentPageInfo struct {
+    TotalPages int              `json:"total_pages"`
+    Pages      []PageDimensions `json:"pages"`
+}
+
+type PageDimensions struct {
+    PageNumber int        `json:"page_number"`
+    Width      float64    `json:"width"`
+    Height     float64    `json:"height"`
+    Rotation   int        `json:"rotation"`
+    CropBox    *Rectangle `json:"crop_box,omitempty"`
+    Unit       string     `json:"unit"` // "points", "inches", "mm"
+}
+
+# Test Strategy:
+Comprehensive testing and debugging strategy to fix the pdf_get_page_info tool:
+
+1. **Root Cause Debugging**:
+   - Add extensive logging to trace page tree traversal
+   - Test with simple single-page PDF first to verify basic functionality
+   - Use PDF debugging tools (qpdf, pdftk) to verify actual page counts
+   - Compare tool output with known PDF metadata
+
+2. **Page Count Tests**:
+   - Test with PDFs containing 0, 1, 10, 100, 1000+ pages
+   - Test with PDFs having complex page trees (nested Pages nodes)
+   - Test with linearized PDFs
+   - Test with PDFs having deleted/removed pages
+   - Verify count matches other PDF tools (pdfinfo, qpdf --show-npages)
+
+3. **Dimension Extraction Tests**:
+   - Test standard page sizes: Letter (612x792), A4 (595x842), Legal
+   - Test custom page sizes and mixed page sizes within same document
+   - Test rotated pages (0°, 90°, 180°, 270°)
+   - Test with CropBox, BleedBox, TrimBox, ArtBox
+   - Test inheritance of MediaBox from parent Pages nodes
+
+4. **Edge Cases**:
+   - Test corrupted PDFs with missing Pages dictionary
+   - Test PDFs with circular references in page tree
+   - Test encrypted PDFs (should fail gracefully)
+   - Test PDFs with non-standard page tree structures
+   - Test very large PDFs (memory efficiency)
+
+5. **Integration Tests**:
+   - Verify fixed tool works with pdf_analyze_document workflow
+   - Test with real-world PDFs: books, reports, forms, scanned documents
+   - Benchmark performance on large documents
+   - Verify JSON output format is consistent and parseable

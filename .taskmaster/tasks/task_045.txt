@@ -1,0 +1,232 @@
+# Task ID: 45
+# Title: Redesign pdf_analyze_document API for Simplicity
+# Status: pending
+# Dependencies: 24, 10, 42, 43
+# Priority: high
+# Description: Redesign the pdf_analyze_document tool API to be intuitive and self-configuring, with automatic content extraction, optional parameters with sensible defaults, and clear error messages that guide users to successful document analysis.
+# Details:
+Implement a complete API redesign for pdf_analyze_document that prioritizes ease of use and automatic configuration:
+
+```go
+// cmd/pdf_analyze_document/main.go
+package main
+
+import (
+    "github.com/yourusername/pdfextract/internal/analysis"
+    "github.com/yourusername/pdfextract/pkg/models"
+)
+
+// Simplified API with all optional parameters
+type AnalyzeRequest struct {
+    // Optional parameters with sensible defaults
+    Pages      []int    `json:"pages,omitempty"`      // Default: all pages
+    Features   []string `json:"features,omitempty"`   // Default: ["text", "structure", "metadata"]
+    MaxDepth   int      `json:"max_depth,omitempty"`  // Default: 3 (for structure analysis)
+    Language   string   `json:"language,omitempty"`   // Default: "en" 
+    OutputMode string   `json:"output_mode,omitempty"` // Default: "full"
+}
+
+// Redesigned main analysis function
+func analyzeDocument(pdfPath string, options *AnalyzeRequest) (*DocumentAnalysis, error) {
+    // Apply defaults if options is nil
+    if options == nil {
+        options = &AnalyzeRequest{}
+    }
+    
+    // Apply sensible defaults
+    if len(options.Features) == 0 {
+        options.Features = []string{"text", "structure", "metadata", "summary"}
+    }
+    if options.MaxDepth == 0 {
+        options.MaxDepth = 3
+    }
+    if options.Language == "" {
+        options.Language = "en"
+    }
+    
+    // Create analyzer with auto-configuration
+    analyzer := analysis.NewAutoAnalyzer()
+    
+    // Automatically extract content as needed
+    result, err := analyzer.AnalyzeWithAutoExtraction(pdfPath, options)
+    if err != nil {
+        return nil, wrapErrorWithHelpfulMessage(err, pdfPath)
+    }
+    
+    return result, nil
+}
+
+// internal/analysis/auto_analyzer.go
+package analysis
+
+type AutoAnalyzer struct {
+    extractor    *SmartExtractor
+    analyzer     *DocumentAnalyzer
+    errorHandler *UserFriendlyErrorHandler
+}
+
+func (a *AutoAnalyzer) AnalyzeWithAutoExtraction(pdfPath string, opts *AnalyzeRequest) (*DocumentAnalysis, error) {
+    // Step 1: Auto-detect what needs to be extracted
+    needed := a.detectNeededContent(opts.Features)
+    
+    // Step 2: Extract only what's needed, with progress feedback
+    content, err := a.extractor.ExtractContent(pdfPath, needed, func(progress float64) {
+        // Optional progress callback
+    })
+    if err != nil {
+        return nil, a.errorHandler.WrapWithContext(err, "extraction", pdfPath)
+    }
+    
+    // Step 3: Perform analysis with extracted content
+    analysis := &DocumentAnalysis{
+        DocumentInfo: a.buildDocumentInfo(content),
+        Content:      a.analyzeContent(content, opts),
+        Structure:    a.analyzeStructure(content, opts.MaxDepth),
+        Summary:      a.generateSummary(content, opts.Language),
+    }
+    
+    return analysis, nil
+}
+
+// Simplified error messages with actionable guidance
+func wrapErrorWithHelpfulMessage(err error, pdfPath string) error {
+    switch {
+    case errors.Is(err, ErrFileNotFound):
+        return fmt.Errorf("PDF file not found at '%s'. Please check the file path and try again", pdfPath)
+    
+    case errors.Is(err, ErrCorruptedPDF):
+        return fmt.Errorf("The PDF appears to be corrupted. Try opening it in a PDF viewer first. If it opens, please report this issue with the file")
+    
+    case errors.Is(err, ErrPasswordProtected):
+        return fmt.Errorf("This PDF is password protected. The tool currently doesn't support encrypted PDFs")
+    
+    case errors.Is(err, ErrUnsupportedVersion):
+        return fmt.Errorf("This PDF uses features from a newer PDF version that aren't supported yet. The tool supports PDF 1.4 and 1.7")
+    
+    default:
+        return fmt.Errorf("Failed to analyze PDF: %v. If this persists, try with a simpler PDF first", err)
+    }
+}
+
+// Example usage documentation
+/*
+Examples:
+
+1. Analyze entire document with defaults:
+   pdf_analyze_document document.pdf
+
+2. Analyze specific pages:
+   pdf_analyze_document document.pdf --pages 1,2,3
+
+3. Get only text content:
+   pdf_analyze_document document.pdf --features text
+
+4. Get structure up to headings:
+   pdf_analyze_document document.pdf --features structure --max-depth 2
+*/
+
+// pkg/models/analysis.go
+type DocumentAnalysis struct {
+    DocumentInfo DocumentInfo           `json:"document_info"`
+    Content      map[string]interface{} `json:"content"`
+    Structure    *DocumentStructure     `json:"structure,omitempty"`
+    Summary      *DocumentSummary       `json:"summary,omitempty"`
+    Warnings     []string              `json:"warnings,omitempty"`
+}
+
+type DocumentInfo struct {
+    Title       string    `json:"title"`
+    Author      string    `json:"author,omitempty"`
+    PageCount   int       `json:"page_count"`
+    FileSize    int64     `json:"file_size"`
+    CreatedDate time.Time `json:"created_date,omitempty"`
+    PDFVersion  string    `json:"pdf_version"`
+}
+
+// Smart content extraction that handles common issues automatically
+type SmartExtractor struct {
+    cache        *ContentCache
+    errorRecovery *ErrorRecovery
+}
+
+func (se *SmartExtractor) ExtractContent(pdfPath string, needed []string, progress func(float64)) (*ExtractedContent, error) {
+    // Check cache first
+    if cached := se.cache.Get(pdfPath, needed); cached != nil {
+        return cached, nil
+    }
+    
+    // Open PDF with automatic recovery
+    doc, err := se.openPDFWithRecovery(pdfPath)
+    if err != nil {
+        return nil, err
+    }
+    defer doc.Close()
+    
+    content := &ExtractedContent{}
+    
+    // Extract based on what's needed
+    for i, feature := range needed {
+        progress(float64(i) / float64(len(needed)))
+        
+        switch feature {
+        case "text":
+            content.Text = se.extractTextWithFallback(doc)
+        case "structure":
+            content.Structure = se.detectStructure(doc)
+        case "metadata":
+            content.Metadata = se.extractMetadata(doc)
+        }
+    }
+    
+    // Cache for future use
+    se.cache.Store(pdfPath, needed, content)
+    
+    return content, nil
+}
+
+# Test Strategy:
+Comprehensive testing strategy for the simplified pdf_analyze_document API:
+
+1. **Zero-Configuration Tests**:
+   - Test calling with just a PDF path (no options) on various document types
+   - Verify sensible defaults are applied automatically
+   - Ensure full document analysis completes without errors
+   - Test that all default features (text, structure, metadata, summary) are included
+
+2. **Automatic Content Extraction Tests**:
+   - Test that content is extracted automatically when analyze is called
+   - Verify extraction only happens for requested features (efficiency)
+   - Test caching prevents redundant extraction on repeated calls
+   - Verify progress callbacks work during extraction
+
+3. **Error Message Clarity Tests**:
+   - Test with non-existent file path, verify clear "file not found" message
+   - Test with corrupted PDF, verify helpful corruption message with guidance
+   - Test with password-protected PDF, verify clear unsupported message
+   - Test with PDF 2.0 file, verify version incompatibility message
+   - Ensure no technical stack traces in user-facing errors
+
+4. **Optional Parameter Tests**:
+   - Test pages parameter: single page, range, non-contiguous pages
+   - Test features parameter: single feature, multiple features, invalid features
+   - Test max_depth parameter for structure analysis limiting
+   - Test language parameter affects summary generation
+   - Verify all parameters truly optional with good defaults
+
+5. **Robustness Tests**:
+   - Test with PDFs that previously caused "no content elements" errors
+   - Test with large PDFs (1000+ pages) - should work without configuration
+   - Test with PDFs missing common structures (no text, no metadata)
+   - Test recovery from transient errors during extraction
+
+6. **API Usability Tests**:
+   - Verify command works with just: `pdf_analyze_document file.pdf`
+   - Test that common use cases require no configuration
+   - Verify output is self-explanatory without documentation
+   - Test that warnings are included for non-critical issues
+
+7. **Performance Tests**:
+   - Verify caching improves performance on repeated analysis
+   - Test that partial feature extraction is faster than full
+   - Ensure memory usage is reasonable for large documents
+   - Test concurrent analysis requests don't interfere

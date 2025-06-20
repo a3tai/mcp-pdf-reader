@@ -1,0 +1,276 @@
+# Task ID: 42
+# Title: Fix PDF Parsing Robustness and Error Recovery
+# Status: pending
+# Dependencies: 2, 3, 4, 6, 33, 34
+# Priority: high
+# Description: Improve error handling and recovery mechanisms throughout the PDF parsing pipeline to handle malformed PDFs gracefully. Add comprehensive panic recovery, better error reporting, and fallback strategies when encountering invalid stream objects, corrupted data, or spec violations.
+# Details:
+Implement a comprehensive error handling and recovery system that makes the PDF parser resilient to malformed documents and spec violations:
+
+```go
+// internal/pdf/errors/types.go
+package errors
+
+import (
+    "fmt"
+    "runtime/debug"
+)
+
+type PDFError struct {
+    Type        ErrorType
+    Message     string
+    Context     string
+    Offset      int64
+    ObjectNum   int
+    GenNum      int
+    Recoverable bool
+    StackTrace  string
+}
+
+type ErrorType int
+
+const (
+    ErrorTypeInvalidHeader ErrorType = iota
+    ErrorTypeCorruptedXRef
+    ErrorTypeMalformedObject
+    ErrorTypeInvalidStream
+    ErrorTypeMissingObject
+    ErrorTypeCircularReference
+    ErrorTypeInvalidEncoding
+    ErrorTypeCorruptedData
+)
+
+// internal/pdf/parser/recovery.go
+package parser
+
+type RecoveryStrategy interface {
+    Recover(err *PDFError, context ParseContext) (interface{}, error)
+    CanRecover(err *PDFError) bool
+}
+
+type ParseContext struct {
+    Reader      io.ReadSeeker
+    XRef        *XRefTable
+    ObjectCache map[string]interface{}
+    Options     *ParseOptions
+}
+
+type ParseOptions struct {
+    StrictMode          bool
+    MaxRecoveryAttempts int
+    EnableFallbacks     bool
+    SkipCorruptedPages  bool
+    RepairXRef          bool
+}
+
+// internal/pdf/parser/robust_parser.go
+type RobustParser struct {
+    parser      *PDFParser
+    recovery    map[ErrorType]RecoveryStrategy
+    errorLog    []PDFError
+    options     ParseOptions
+}
+
+func (rp *RobustParser) ParseWithRecovery() (*Document, error) {
+    defer func() {
+        if r := recover(); r != nil {
+            err := &PDFError{
+                Type:       ErrorTypeCorruptedData,
+                Message:    fmt.Sprintf("Parser panic: %v", r),
+                StackTrace: string(debug.Stack()),
+                Recoverable: false,
+            }
+            rp.errorLog = append(rp.errorLog, *err)
+        }
+    }()
+    
+    doc, err := rp.parser.Parse()
+    if err != nil {
+        return rp.attemptRecovery(err)
+    }
+    return doc, nil
+}
+
+// internal/pdf/parser/stream_recovery.go
+type StreamRecovery struct {
+    fallbackFilters []string
+    maxRetries      int
+}
+
+func (sr *StreamRecovery) RecoverCorruptedStream(obj *StreamObject, err error) ([]byte, error) {
+    // Try alternative decompression methods
+    for _, filter := range sr.fallbackFilters {
+        if data, err := sr.tryFilter(obj.RawData, filter); err == nil {
+            return data, nil
+        }
+    }
+    
+    // Try to extract readable portions
+    if partial := sr.extractReadableData(obj.RawData); len(partial) > 0 {
+        return partial, fmt.Errorf("partial stream recovery: %w", err)
+    }
+    
+    return nil, fmt.Errorf("stream unrecoverable: %w", err)
+}
+
+// internal/pdf/parser/xref_recovery.go
+type XRefRecovery struct {
+    scanner *bufio.Scanner
+}
+
+func (xr *XRefRecovery) RebuildXRef(reader io.ReadSeeker) (*XRefTable, error) {
+    // Scan entire file for obj/endobj pairs
+    objects := xr.scanForObjects(reader)
+    
+    // Build new xref table
+    xref := NewXRefTable()
+    for _, obj := range objects {
+        xref.AddEntry(obj.Number, obj.Generation, obj.Offset)
+    }
+    
+    // Try to find trailer
+    trailer := xr.findTrailer(reader)
+    if trailer == nil {
+        trailer = xr.reconstructTrailer(objects)
+    }
+    
+    return xref, nil
+}
+
+// internal/pdf/parser/object_recovery.go
+type ObjectRecovery struct {
+    validator ObjectValidator
+}
+
+func (or *ObjectRecovery) RecoverMalformedObject(data []byte, expectedType string) (interface{}, error) {
+    // Try lenient parsing
+    if obj, err := or.parseLenient(data); err == nil {
+        if or.validator.IsValidType(obj, expectedType) {
+            return obj, nil
+        }
+    }
+    
+    // Try type coercion
+    if coerced := or.tryCoercion(data, expectedType); coerced != nil {
+        return coerced, nil
+    }
+    
+    // Return default value for type
+    return or.getDefaultValue(expectedType), fmt.Errorf("object recovery: using default")
+}
+
+// internal/pdf/parser/error_reporter.go
+type ErrorReporter struct {
+    errors   []PDFError
+    warnings []PDFError
+    logger   *log.Logger
+}
+
+func (er *ErrorReporter) Report(err PDFError) {
+    if err.Recoverable {
+        er.warnings = append(er.warnings, err)
+        er.logger.Warn("PDF warning", 
+            "type", err.Type,
+            "message", err.Message,
+            "context", err.Context,
+            "offset", err.Offset)
+    } else {
+        er.errors = append(er.errors, err)
+        er.logger.Error("PDF error",
+            "type", err.Type,
+            "message", err.Message,
+            "context", err.Context,
+            "offset", err.Offset,
+            "stack", err.StackTrace)
+    }
+}
+
+func (er *ErrorReporter) GenerateReport() *ParseReport {
+    return &ParseReport{
+        Errors:      er.errors,
+        Warnings:    er.warnings,
+        ErrorCount:  len(er.errors),
+        WarningCount: len(er.warnings),
+        Recoverable: er.calculateRecoverability(),
+    }
+}
+
+// Example usage in tools
+func (t *PDFExtractTool) ExtractWithRecovery(path string) (*ExtractResult, error) {
+    options := ParseOptions{
+        StrictMode:          false,
+        MaxRecoveryAttempts: 3,
+        EnableFallbacks:     true,
+        SkipCorruptedPages:  true,
+        RepairXRef:          true,
+    }
+    
+    parser := NewRobustParser(path, options)
+    doc, err := parser.ParseWithRecovery()
+    
+    if err != nil && !parser.IsPartialSuccess() {
+        return nil, fmt.Errorf("unrecoverable PDF errors: %w", err)
+    }
+    
+    result := &ExtractResult{
+        Content:     doc.ExtractableContent(),
+        ParseReport: parser.GetReport(),
+        Partial:     parser.IsPartialSuccess(),
+    }
+    
+    return result, nil
+}
+```
+
+# Test Strategy:
+Comprehensive testing strategy for PDF parsing robustness and error recovery:
+
+1. **Panic Recovery Tests**:
+   - Test with PDFs that trigger panics in various parser components
+   - Verify panic recovery doesn't lose parser state
+   - Test nested panic scenarios
+   - Validate stack trace capture and reporting
+
+2. **Malformed PDF Tests**:
+   - Test with PDFs missing required headers (%PDF-)
+   - Test with truncated files at various points
+   - Test with corrupted cross-reference tables
+   - Test with invalid object definitions
+   - Test with circular object references
+   - Test with missing endobj/endstream markers
+
+3. **Stream Recovery Tests**:
+   - Test with corrupted compressed streams
+   - Test with incorrect stream length declarations
+   - Test with missing stream filters
+   - Test with partially readable stream data
+   - Verify fallback decompression strategies
+
+4. **XRef Recovery Tests**:
+   - Test XRef table reconstruction from object scanning
+   - Test with missing or corrupted trailer dictionaries
+   - Test with broken Prev chains in incremental updates
+   - Verify object offset discovery through file scanning
+
+5. **Object Recovery Tests**:
+   - Test recovery of malformed dictionaries (missing >>)
+   - Test recovery of corrupted arrays (missing ])
+   - Test type coercion for common mistakes (string vs name)
+   - Test default value generation for missing required fields
+
+6. **Error Reporting Tests**:
+   - Verify comprehensive error logging with context
+   - Test error categorization (recoverable vs fatal)
+   - Test report generation with statistics
+   - Verify error messages are actionable
+
+7. **Integration Tests**:
+   - Test with real-world corrupted PDFs from various sources
+   - Test with PDFs from legacy generators with known issues
+   - Test partial extraction success scenarios
+   - Verify tools continue processing after recoverable errors
+
+8. **Performance Tests**:
+   - Ensure recovery mechanisms don't significantly impact parsing speed
+   - Test memory usage with large corrupted files
+   - Verify recovery attempt limits work correctly

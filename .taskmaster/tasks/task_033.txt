@@ -1,0 +1,301 @@
+# Task ID: 33
+# Title: Implement Complete Stream Filter Support for PDF 1.4 Compliance
+# Status: done
+# Dependencies: 2, 3, 6
+# Priority: high
+# Description: Add support for all missing PDF 1.4 stream filters including CCITTFaxDecode, JBIG2Decode, RunLengthDecode, complete LZWDecode implementation, and proper DecodeParms handling to enable reading of PDFs that use these compression methods.
+# Details:
+Implement comprehensive stream filter support for PDF 1.4 compliance, building on the existing parser infrastructure:
+
+```go
+// internal/pdf/filters/filter_factory.go
+package filters
+
+import (
+    "io"
+    "github.com/yourusername/pdfextract/internal/pdf"
+)
+
+type FilterFactory struct {
+    decoders map[string]StreamDecoder
+}
+
+type StreamDecoder interface {
+    Decode(reader io.Reader, params map[string]interface{}) (io.Reader, error)
+}
+
+func NewFilterFactory() *FilterFactory {
+    f := &FilterFactory{
+        decoders: make(map[string]StreamDecoder),
+    }
+    
+    // Register all PDF 1.4 filters
+    f.RegisterDecoder("FlateDecode", &FlateDecoder{})
+    f.RegisterDecoder("LZWDecode", &LZWDecoder{})
+    f.RegisterDecoder("RunLengthDecode", &RunLengthDecoder{})
+    f.RegisterDecoder("CCITTFaxDecode", &CCITTFaxDecoder{})
+    f.RegisterDecoder("JBIG2Decode", &JBIG2Decoder{})
+    f.RegisterDecoder("DCTDecode", &DCTDecoder{})
+    f.RegisterDecoder("JPXDecode", &JPXDecoder{})
+    
+    return f
+}
+
+// internal/pdf/filters/lzw_decoder.go
+type LZWDecoder struct{}
+
+func (d *LZWDecoder) Decode(reader io.Reader, params map[string]interface{}) (io.Reader, error) {
+    // Extract DecodeParms
+    earlyChange := 1 // Default per PDF spec
+    if params != nil {
+        if ec, ok := params["EarlyChange"].(int); ok {
+            earlyChange = ec
+        }
+    }
+    
+    // Implement LZW decompression with proper handling of:
+    // - Variable code length (9-12 bits)
+    // - Clear and EOD codes
+    // - EarlyChange parameter
+    return lzw.NewReader(reader, earlyChange), nil
+}
+
+// internal/pdf/filters/ccitt_decoder.go
+type CCITTFaxDecoder struct{}
+
+func (d *CCITTFaxDecoder) Decode(reader io.Reader, params map[string]interface{}) (io.Reader, error) {
+    // Extract CCITT parameters
+    k := 0 // Default: Group 3, 1-D
+    columns := 1728 // Default width
+    rows := 0 // Default: unspecified
+    blackIs1 := false
+    encodedByteAlign := false
+    
+    if params != nil {
+        if val, ok := params["K"].(int); ok {
+            k = val
+        }
+        if val, ok := params["Columns"].(int); ok {
+            columns = val
+        }
+        if val, ok := params["Rows"].(int); ok {
+            rows = val
+        }
+        if val, ok := params["BlackIs1"].(bool); ok {
+            blackIs1 = val
+        }
+        if val, ok := params["EncodedByteAlign"].(bool); ok {
+            encodedByteAlign = val
+        }
+    }
+    
+    // Implement CCITT Fax decoding:
+    // - Group 3 (K=0) or Group 4 (K<0) or Mixed (K>0)
+    // - Handle run-length encoding
+    // - Process EOL markers
+    decoder := &ccittDecoder{
+        k:                k,
+        columns:          columns,
+        rows:             rows,
+        blackIs1:         blackIs1,
+        encodedByteAlign: encodedByteAlign,
+    }
+    
+    return decoder.decode(reader)
+}
+
+// internal/pdf/filters/jbig2_decoder.go
+type JBIG2Decoder struct{}
+
+func (d *JBIG2Decoder) Decode(reader io.Reader, params map[string]interface{}) (io.Reader, error) {
+    // Extract JBIG2 parameters
+    var globals io.Reader
+    if params != nil {
+        if globalStream, ok := params["JBIG2Globals"].(io.Reader); ok {
+            globals = globalStream
+        }
+    }
+    
+    // Implement JBIG2 decoding:
+    // - Parse segment headers
+    // - Handle symbol dictionaries
+    // - Process text/halftone/generic regions
+    // - Apply arithmetic decoding
+    decoder := &jbig2Decoder{
+        globals: globals,
+    }
+    
+    return decoder.decode(reader)
+}
+
+// internal/pdf/filters/runlength_decoder.go
+type RunLengthDecoder struct{}
+
+func (d *RunLengthDecoder) Decode(reader io.Reader, params map[string]interface{}) (io.Reader, error) {
+    // Implement RunLength decoding per PDF spec:
+    // - Read length byte n
+    // - If 0 <= n <= 127: copy next n+1 bytes literally
+    // - If n = 128: EOD marker
+    // - If 129 <= n <= 255: repeat next byte 257-n times
+    
+    output := &bytes.Buffer{}
+    input := bufio.NewReader(reader)
+    
+    for {
+        length, err := input.ReadByte()
+        if err == io.EOF {
+            break
+        }
+        if err != nil {
+            return nil, err
+        }
+        
+        if length == 128 {
+            // EOD marker
+            break
+        } else if length <= 127 {
+            // Copy n+1 bytes literally
+            for i := 0; i <= int(length); i++ {
+                b, err := input.ReadByte()
+                if err != nil {
+                    return nil, err
+                }
+                output.WriteByte(b)
+            }
+        } else {
+            // Repeat next byte 257-n times
+            b, err := input.ReadByte()
+            if err != nil {
+                return nil, err
+            }
+            count := 257 - int(length)
+            for i := 0; i < count; i++ {
+                output.WriteByte(b)
+            }
+        }
+    }
+    
+    return bytes.NewReader(output.Bytes()), nil
+}
+
+// internal/pdf/filters/decode_parms.go
+type DecodeParmsParser struct{}
+
+func (p *DecodeParmsParser) Parse(obj pdf.Object) (map[string]interface{}, error) {
+    // Handle various DecodeParms formats:
+    // - Single dictionary
+    // - Array of dictionaries (for multiple filters)
+    // - Null (use defaults)
+    
+    if obj == nil {
+        return nil, nil
+    }
+    
+    switch v := obj.(type) {
+    case pdf.Dictionary:
+        return p.parseDictionary(v)
+    case pdf.Array:
+        // For filter chains, return first set of params
+        if len(v) > 0 {
+            if dict, ok := v[0].(pdf.Dictionary); ok {
+                return p.parseDictionary(dict)
+            }
+        }
+    }
+    
+    return nil, nil
+}
+
+// internal/pdf/stream_decoder.go
+type StreamDecoder struct {
+    filterFactory *FilterFactory
+    parmsParser   *DecodeParmsParser
+}
+
+func (d *StreamDecoder) DecodeStream(stream pdf.Stream) ([]byte, error) {
+    // Get filter chain
+    filters := d.getFilters(stream.Dictionary)
+    decodeParms := d.getDecodeParms(stream.Dictionary)
+    
+    // Apply filters in sequence
+    reader := bytes.NewReader(stream.Data)
+    var currentReader io.Reader = reader
+    
+    for i, filter := range filters {
+        decoder, ok := d.filterFactory.decoders[filter]
+        if !ok {
+            return nil, fmt.Errorf("unsupported filter: %s", filter)
+        }
+        
+        // Get parameters for this filter
+        var params map[string]interface{}
+        if i < len(decodeParms) {
+            params = decodeParms[i]
+        }
+        
+        // Apply filter
+        decoded, err := decoder.Decode(currentReader, params)
+        if err != nil {
+            return nil, fmt.Errorf("filter %s failed: %w", filter, err)
+        }
+        
+        currentReader = decoded
+    }
+    
+    // Read final decoded data
+    return io.ReadAll(currentReader)
+}
+```
+
+Key implementation considerations:
+
+1. **Filter Chain Support**: Handle multiple filters applied in sequence
+2. **DecodeParms Handling**: Properly parse and apply filter-specific parameters
+3. **Memory Efficiency**: Use streaming decoders where possible
+4. **Error Recovery**: Graceful handling of corrupted compressed data
+5. **Specification Compliance**: Follow PDF 1.4 specification exactly for each filter
+
+Integration with existing components:
+- Extend content stream parser to use new filters
+- Update image extractor to handle additional compression formats
+- Ensure streaming parser can decode filters progressively
+
+# Test Strategy:
+Comprehensive testing strategy for stream filter support:
+
+1. **Individual Filter Tests**:
+   - Test each filter with known input/output pairs from PDF specification examples
+   - Verify LZWDecode with different EarlyChange values (0 and 1)
+   - Test CCITTFaxDecode with Group 3 (1D/2D) and Group 4 encoding samples
+   - Validate JBIG2Decode with and without global segments
+   - Test RunLengthDecode with all three cases: literal copy, repeat, and EOD
+   - Verify proper handling of filter-specific DecodeParms
+
+2. **Filter Chain Tests**:
+   - Test multiple filters applied in sequence (e.g., FlateDecode after LZWDecode)
+   - Verify correct parameter association with each filter in chain
+   - Test with missing or null DecodeParms (should use defaults)
+
+3. **Real PDF Tests**:
+   - Collect sample PDFs using each compression method from various sources
+   - Test with scanned documents (typically use CCITTFaxDecode)
+   - Test with PDFs from different generators (Adobe, LibreOffice, etc.)
+   - Verify extracted content matches expected output
+
+4. **Error Handling Tests**:
+   - Test with corrupted compressed data
+   - Verify graceful handling of unsupported filter names
+   - Test with invalid DecodeParms
+   - Ensure proper error messages for debugging
+
+5. **Performance Tests**:
+   - Benchmark decompression speed for large streams
+   - Monitor memory usage during decompression
+   - Test with extremely large compressed streams
+   - Verify streaming decoders don't load entire stream into memory
+
+6. **Integration Tests**:
+   - Test with content stream parser for compressed text streams
+   - Verify image extraction works with all new filters
+   - Test with streaming parser for progressive decoding
+   - Ensure form field values are correctly extracted from compressed streams

@@ -1,0 +1,108 @@
+# Task ID: 11
+# Title: Research and Integrate PDF Form Library (pdfcpu)
+# Status: done
+# Dependencies: 2, 7
+# Priority: high
+# Description: Research and integrate pdfcpu or similar Go library that provides proper AcroForm access according to PDF 1.4/1.7 standards, enabling robust form field extraction capabilities
+# Details:
+Research and integrate a PDF library with AcroForm support:
+
+```go
+// internal/pdf/forms/library_adapter.go
+type FormLibraryAdapter interface {
+    LoadPDF(reader io.Reader) error
+    GetAcroForm() (*AcroForm, error)
+    ExtractFormFields() ([]RawFormField, error)
+}
+
+// internal/pdf/forms/pdfcpu_adapter.go
+type PDFCPUAdapter struct {
+    ctx *pdfcpu.Context
+}
+
+func (p *PDFCPUAdapter) LoadPDF(reader io.Reader) error {
+    // Initialize pdfcpu context
+    // Validate PDF structure
+    // Load form dictionary
+}
+
+func (p *PDFCPUAdapter) GetAcroForm() (*AcroForm, error) {
+    // Access AcroForm dictionary
+    // Parse field hierarchy
+    // Extract form metadata
+}
+
+// internal/pdf/forms/field_parser.go
+type FieldParser struct {
+    adapter FormLibraryAdapter
+}
+
+func (fp *FieldParser) ParseField(dict pdfcpu.Dict) (*RawFormField, error) {
+    // Extract field type (FT)
+    // Get field name (T)
+    // Parse field flags (Ff)
+    // Extract default value (DV)
+    // Get current value (V)
+    // Parse appearance streams
+}
+```
+
+Research considerations:
+1. Evaluate pdfcpu vs other libraries (unipdf, pdfium-go bindings)
+2. Ensure pure Go implementation (no CGO) for portability
+3. Verify PDF 1.4/1.7 standard compliance
+4. Check support for all form field types:
+   - Text fields (Tx)
+   - Checkboxes (Btn with checkbox flag)
+   - Radio buttons (Btn with radio flag)
+   - Dropdown/combo boxes (Ch)
+   - Signature fields (Sig)
+5. Validate handling of field inheritance and merged dictionaries
+6. Test performance with large forms
+
+Integration approach:
+```go
+// internal/extractors/forms_enhanced.go
+type EnhancedFormExtractor struct {
+    parser    *pdf.PDFParser
+    adapter   FormLibraryAdapter
+}
+
+func (efe *EnhancedFormExtractor) Extract(doc *PDFDocument) ([]FormField, error) {
+    // Use existing parser for basic structure
+    // Leverage library for AcroForm access
+    // Map library fields to our FormField model
+    // Handle field positioning and appearance
+}
+```
+
+# Test Strategy:
+Create comprehensive test suite for library integration:
+
+1. Library evaluation tests:
+   - Test pdfcpu with sample forms from PDF reference
+   - Verify field extraction accuracy
+   - Benchmark performance vs existing implementation
+
+2. Integration tests:
+   - Test with forms containing all field types
+   - Verify field hierarchy parsing
+   - Test inherited field properties
+   - Validate appearance stream handling
+
+3. Compatibility tests:
+   - Test with PDF 1.4 and 1.7 forms
+   - Verify handling of XFA forms (if supported)
+   - Test encrypted/protected forms
+   - Validate Unicode field names and values
+
+4. Edge case tests:
+   - Malformed AcroForm dictionaries
+   - Missing required field properties
+   - Circular field references
+   - Large forms (1000+ fields)
+
+5. Regression tests:
+   - Ensure existing PDF parsing still works
+   - Verify no performance degradation
+   - Test memory usage with large forms

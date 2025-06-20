@@ -383,6 +383,7 @@ Current PDF processing tools for AI systems have significant limitations:
   - Use official Adobe specifications as reference
   - Implement robust error handling
   - Build comprehensive test suite
+  - After each task and sub-task you should add tests and keep working on it until they are passing and correct.
 
 #### Risk: Performance Degradation
 - **Challenge**: Additional processing may slow extraction

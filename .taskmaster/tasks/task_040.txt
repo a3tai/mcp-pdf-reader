@@ -1,0 +1,430 @@
+# Task ID: 40
+# Title: Implement PDF Actions Support
+# Status: pending
+# Dependencies: 2, 3, 34, 35, 39
+# Priority: medium
+# Description: Add support for all standard PDF actions including GoTo, GoToR (remote), Launch, URI, Named, SubmitForm, ResetForm, ImportData, JavaScript, SetOCGState, Rendition, Trans, and GoTo3DView actions. Include proper destination handling and security validation.
+# Details:
+Implement a comprehensive PDF actions system that supports all standard action types according to PDF 1.4/1.7 specifications (Chapter 12.6):
+
+```go
+// internal/pdf/actions/types.go
+package actions
+
+import (
+    "net/url"
+    "github.com/yourusername/pdfextract/internal/pdf/destinations"
+    "github.com/yourusername/pdfextract/internal/pdf/security"
+)
+
+type ActionType string
+
+const (
+    TypeGoTo       ActionType = "GoTo"       // Go to destination in current document
+    TypeGoToR      ActionType = "GoToR"      // Go to destination in another document
+    TypeLaunch     ActionType = "Launch"     // Launch application
+    TypeURI        ActionType = "URI"        // Resolve URI
+    TypeNamed      ActionType = "Named"      // Execute named action
+    TypeSubmitForm ActionType = "SubmitForm" // Submit form data
+    TypeResetForm  ActionType = "ResetForm"  // Reset form fields
+    TypeImportData ActionType = "ImportData" // Import form data
+    TypeJavaScript ActionType = "JavaScript" // Execute JavaScript
+    TypeSetOCGState ActionType = "SetOCGState" // Set optional content state
+    TypeRendition  ActionType = "Rendition"  // Control multimedia content
+    TypeTrans      ActionType = "Trans"      // Set page transition
+    TypeGoTo3DView ActionType = "GoTo3DView" // Set 3D view
+)
+
+// Base action interface
+type Action interface {
+    Type() ActionType
+    Validate() error
+    Execute(context *ActionContext) error
+    GetNext() []Action // Action chains
+}
+
+// Action context for execution
+type ActionContext struct {
+    Document     *PDFDocument
+    CurrentPage  int
+    Security     *security.SecurityHandler
+    FormData     map[string]interface{}
+    AllowExternal bool // Security flag for external actions
+}
+
+// internal/pdf/actions/goto.go
+type GoToAction struct {
+    Destination destinations.Destination
+    Next        []Action
+}
+
+func (a *GoToAction) Type() ActionType {
+    return TypeGoTo
+}
+
+func (a *GoToAction) Validate() error {
+    if a.Destination == nil {
+        return fmt.Errorf("GoTo action requires destination")
+    }
+    return a.Destination.Validate()
+}
+
+func (a *GoToAction) Execute(ctx *ActionContext) error {
+    // Navigate to destination within current document
+    pageNum, view := a.Destination.GetTarget()
+    if pageNum < 0 || pageNum >= ctx.Document.PageCount() {
+        return fmt.Errorf("invalid page number: %d", pageNum)
+    }
+    // Implementation would trigger navigation
+    return nil
+}
+
+// internal/pdf/actions/gotor.go
+type GoToRAction struct {
+    File        string                   // File specification
+    Destination destinations.Destination // Destination in remote file
+    NewWindow   bool                     // Open in new window
+    Next        []Action
+}
+
+func (a *GoToRAction) Validate() error {
+    if !a.ctx.AllowExternal {
+        return fmt.Errorf("external file access not allowed")
+    }
+    // Validate file specification
+    if a.File == "" {
+        return fmt.Errorf("GoToR requires file specification")
+    }
+    // Security check for file path
+    if err := validateFilePath(a.File); err != nil {
+        return fmt.Errorf("invalid file path: %w", err)
+    }
+    return nil
+}
+
+// internal/pdf/actions/uri.go
+type URIAction struct {
+    URI      string
+    IsMap    bool // Server-side image map
+    Next     []Action
+}
+
+func (a *URIAction) Validate() error {
+    parsedURL, err := url.Parse(a.URI)
+    if err != nil {
+        return fmt.Errorf("invalid URI: %w", err)
+    }
+    // Security validation
+    if !isAllowedScheme(parsedURL.Scheme) {
+        return fmt.Errorf("disallowed URI scheme: %s", parsedURL.Scheme)
+    }
+    return nil
+}
+
+// internal/pdf/actions/form.go
+type SubmitFormAction struct {
+    URL          string
+    Fields       []string // Field names to submit
+    Flags        SubmitFlags
+    CharSet      string
+    Next         []Action
+}
+
+type SubmitFlags uint32
+
+const (
+    SubmitIncludeNoValue SubmitFlags = 1 << 0
+    SubmitExportFormat   SubmitFlags = 1 << 1
+    SubmitGetMethod      SubmitFlags = 1 << 2
+    SubmitCoordinates    SubmitFlags = 1 << 3
+    // ... other flags
+)
+
+type ResetFormAction struct {
+    Fields []string // Field names to reset (empty = all)
+    Flags  uint32
+    Next   []Action
+}
+
+// internal/pdf/actions/javascript.go
+type JavaScriptAction struct {
+    Script string
+    Next   []Action
+}
+
+func (a *JavaScriptAction) Validate() error {
+    // Basic JavaScript validation
+    if containsDangerousPatterns(a.Script) {
+        return fmt.Errorf("potentially dangerous JavaScript detected")
+    }
+    return nil
+}
+
+func (a *JavaScriptAction) Execute(ctx *ActionContext) error {
+    if !ctx.AllowJavaScript {
+        return fmt.Errorf("JavaScript execution not allowed")
+    }
+    // Would integrate with JavaScript engine
+    return fmt.Errorf("JavaScript execution not implemented")
+}
+
+// internal/pdf/actions/parser.go
+type ActionParser struct {
+    resolver ObjectResolver
+}
+
+func (p *ActionParser) ParseAction(dict map[string]interface{}) (Action, error) {
+    typeStr, ok := dict["Type"].(string)
+    if !ok || typeStr != "Action" {
+        return nil, fmt.Errorf("invalid action dictionary")
+    }
+    
+    subtype, ok := dict["S"].(string)
+    if !ok {
+        return nil, fmt.Errorf("action missing subtype")
+    }
+    
+    var action Action
+    var err error
+    
+    switch ActionType(subtype) {
+    case TypeGoTo:
+        action, err = p.parseGoToAction(dict)
+    case TypeGoToR:
+        action, err = p.parseGoToRAction(dict)
+    case TypeLaunch:
+        action, err = p.parseLaunchAction(dict)
+    case TypeURI:
+        action, err = p.parseURIAction(dict)
+    case TypeNamed:
+        action, err = p.parseNamedAction(dict)
+    case TypeSubmitForm:
+        action, err = p.parseSubmitFormAction(dict)
+    case TypeResetForm:
+        action, err = p.parseResetFormAction(dict)
+    case TypeImportData:
+        action, err = p.parseImportDataAction(dict)
+    case TypeJavaScript:
+        action, err = p.parseJavaScriptAction(dict)
+    case TypeSetOCGState:
+        action, err = p.parseSetOCGStateAction(dict)
+    case TypeRendition:
+        action, err = p.parseRenditionAction(dict)
+    case TypeTrans:
+        action, err = p.parseTransAction(dict)
+    case TypeGoTo3DView:
+        action, err = p.parseGoTo3DViewAction(dict)
+    default:
+        return nil, fmt.Errorf("unsupported action type: %s", subtype)
+    }
+    
+    if err != nil {
+        return nil, err
+    }
+    
+    // Parse Next actions (action chains)
+    if next, ok := dict["Next"]; ok {
+        nextActions, err := p.parseNextActions(next)
+        if err != nil {
+            return nil, fmt.Errorf("failed to parse Next actions: %w", err)
+        }
+        action.SetNext(nextActions)
+    }
+    
+    return action, nil
+}
+
+// internal/pdf/actions/destinations.go
+package destinations
+
+type Destination interface {
+    GetTarget() (pageNum int, view View)
+    Validate() error
+}
+
+type View interface {
+    Type() string
+    Parameters() []float64
+}
+
+type XYZView struct {
+    Left, Top, Zoom float64
+}
+
+type FitView struct{}
+
+type FitHView struct {
+    Top float64
+}
+
+// internal/pdf/actions/security.go
+func validateFilePath(path string) error {
+    // Prevent directory traversal
+    if strings.Contains(path, "..") {
+        return fmt.Errorf("directory traversal detected")
+    }
+    // Check for absolute paths
+    if filepath.IsAbs(path) {
+        return fmt.Errorf("absolute paths not allowed")
+    }
+    return nil
+}
+
+func isAllowedScheme(scheme string) bool {
+    allowed := []string{"http", "https", "mailto", "ftp"}
+    for _, s := range allowed {
+        if strings.EqualFold(scheme, s) {
+            return true
+        }
+    }
+    return false
+}
+
+func containsDangerousPatterns(script string) bool {
+    dangerous := []string{
+        "eval(",
+        "Function(",
+        "setTimeout(",
+        "setInterval(",
+        ".constructor(",
+    }
+    scriptLower := strings.ToLower(script)
+    for _, pattern := range dangerous {
+        if strings.Contains(scriptLower, strings.ToLower(pattern)) {
+            return true
+        }
+    }
+    return false
+}
+
+// internal/pdf/actions/executor.go
+type ActionExecutor struct {
+    securityHandler *security.SecurityHandler
+    allowExternal   bool
+    allowJavaScript bool
+}
+
+func (e *ActionExecutor) ExecuteAction(action Action, doc *PDFDocument, currentPage int) error {
+    ctx := &ActionContext{
+        Document:      doc,
+        CurrentPage:   currentPage,
+        Security:      e.securityHandler,
+        AllowExternal: e.allowExternal,
+    }
+    
+    // Validate action before execution
+    if err := action.Validate(); err != nil {
+        return fmt.Errorf("action validation failed: %w", err)
+    }
+    
+    // Execute action
+    if err := action.Execute(ctx); err != nil {
+        return fmt.Errorf("action execution failed: %w", err)
+    }
+    
+    // Execute chained actions
+    for _, next := range action.GetNext() {
+        if err := e.ExecuteAction(next, doc, currentPage); err != nil {
+            return fmt.Errorf("next action failed: %w", err)
+        }
+    }
+    
+    return nil
+}
+```
+
+Key implementation considerations:
+
+1. **Security validation**: Implement strict validation for all external actions (GoToR, Launch, URI)
+2. **Destination handling**: Proper parsing and validation of all destination types
+3. **Action chains**: Support Next field for sequential action execution
+4. **Form actions**: Complete support for form submission and reset with proper field handling
+5. **JavaScript sandboxing**: Basic validation to prevent dangerous operations
+6. **Optional content**: Support for SetOCGState to control layer visibility
+7. **3D content**: Basic support for 3D view actions
+8. **Error handling**: Comprehensive error reporting for invalid actions
+
+# Test Strategy:
+Comprehensive testing strategy for PDF actions support:
+
+1. **Basic Action Parsing Tests**:
+   - Test parsing of all 13 action types from sample PDFs
+   - Verify correct extraction of action parameters
+   - Test with missing required fields (should fail)
+   - Test with invalid action dictionaries
+   - Validate action type detection
+
+2. **GoTo Action Tests**:
+   - Test with various destination types (XYZ, Fit, FitH, etc.)
+   - Test with named destinations
+   - Test with explicit destinations
+   - Verify page number validation
+   - Test with out-of-range page numbers
+
+3. **GoToR (Remote) Action Tests**:
+   - Test with relative file paths
+   - Test with absolute paths (should fail with security check)
+   - Test directory traversal attempts (should fail)
+   - Test with various destination types in remote file
+   - Verify NewWindow flag handling
+
+4. **URI Action Tests**:
+   - Test with HTTP/HTTPS URLs
+   - Test with mailto: links
+   - Test with dangerous schemes (javascript:, file:) - should fail
+   - Test URL encoding and special characters
+   - Test IsMap flag for image maps
+
+5. **Form Action Tests**:
+   - Test SubmitForm with various flag combinations
+   - Test field inclusion/exclusion lists
+   - Test GET vs POST method flags
+   - Test ResetForm with specific fields
+   - Test ImportData action parsing
+
+6. **JavaScript Action Tests**:
+   - Test basic JavaScript parsing
+   - Test dangerous pattern detection (eval, Function constructor)
+   - Test with obfuscated dangerous patterns
+   - Verify script extraction accuracy
+   - Test execution context security
+
+7. **Action Chain Tests**:
+   - Test single Next action
+   - Test array of Next actions
+   - Test deeply nested action chains
+   - Test circular references (should handle gracefully)
+   - Verify execution order
+
+8. **Security Validation Tests**:
+   - Test all external actions with security disabled
+   - Test file path validation for GoToR and Launch
+   - Test URI scheme whitelisting
+   - Test JavaScript sandboxing
+   - Verify permission checking
+
+9. **Integration Tests**:
+   - Test actions within annotations (Link annotations)
+   - Test form field actions (button actions)
+   - Test page open/close actions
+   - Test document-level actions
+   - Test with encrypted PDFs
+
+10. **Error Handling Tests**:
+    - Test with malformed action dictionaries
+    - Test with circular action references
+    - Test with missing required fields
+    - Test with invalid destination references
+    - Verify graceful error recovery
+
+11. **Performance Tests**:
+    - Test parsing of documents with many actions
+    - Measure action validation overhead
+    - Test with complex action chains
+    - Verify memory usage with large action sets
+
+12. **Compliance Tests**:
+    - Test against PDF 1.4 specification examples
+    - Test against PDF 1.7 specification examples
+    - Verify all action types from ISO 32000-1
+    - Test with real-world PDFs containing actions

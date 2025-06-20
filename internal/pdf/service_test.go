@@ -7,8 +7,18 @@ import (
 )
 
 func TestNewService(t *testing.T) {
+	// Create temp directory for test
+	tempDir, err := os.MkdirTemp("", "pdf_service_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
 	maxFileSize := int64(1024 * 1024) // 1MB
-	service := NewService(maxFileSize)
+	service, err := NewService(maxFileSize, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
 
 	if service == nil {
 		t.Fatal("NewService returned nil")
@@ -37,8 +47,18 @@ func TestNewService(t *testing.T) {
 }
 
 func TestService_GetMaxFileSize(t *testing.T) {
+	// Create temp directory for test
+	tempDir, err := os.MkdirTemp("", "pdf_service_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
 	maxFileSize := int64(2 * 1024 * 1024) // 2MB
-	service := NewService(maxFileSize)
+	service, err := NewService(maxFileSize, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
 
 	result := service.GetMaxFileSize()
 	if result != maxFileSize {
@@ -80,8 +100,19 @@ func TestService_ValidateConfiguration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewService(tt.maxFileSize)
-			err := service.ValidateConfiguration()
+			// Create temp directory for test
+			tempDir, err := os.MkdirTemp("", "pdf_service_test")
+			if err != nil {
+				t.Fatalf("failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tempDir)
+
+			service, err := NewService(tt.maxFileSize, tempDir)
+			if err != nil {
+				t.Fatalf("Failed to create service: %v", err)
+			}
+
+			err = service.ValidateConfiguration()
 
 			if tt.expectedError && err == nil {
 				t.Errorf("expected error but got none")
@@ -97,14 +128,17 @@ func TestService_ValidateConfiguration(t *testing.T) {
 }
 
 func TestService_PDFValidateFile(t *testing.T) {
-	service := NewService(1024 * 1024)
-
 	// Create temp directory for test files
 	tempDir, err := os.MkdirTemp("", "service_validate_test")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
+
+	service, err := NewService(1024*1024, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
 
 	// Create test file
 	testFile := filepath.Join(tempDir, "test.pdf")
@@ -136,14 +170,17 @@ func TestService_PDFValidateFile(t *testing.T) {
 }
 
 func TestService_PDFSearchDirectory(t *testing.T) {
-	service := NewService(1024 * 1024)
-
 	// Create temp directory for test files
 	tempDir, err := os.MkdirTemp("", "service_search_test")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
+
+	service, err := NewService(1024*1024, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
 
 	// Create test PDF files
 	testFiles := []string{"doc1.pdf", "doc2.pdf"}
@@ -178,14 +215,17 @@ func TestService_PDFSearchDirectory(t *testing.T) {
 }
 
 func TestService_PDFStatsDirectory(t *testing.T) {
-	service := NewService(1024 * 1024)
-
 	// Create temp directory for test files
 	tempDir, err := os.MkdirTemp("", "service_stats_test")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
+
+	service, err := NewService(1024*1024, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
 
 	// Create test PDF files
 	testFiles := map[string]int{
@@ -229,7 +269,17 @@ func TestService_PDFStatsDirectory(t *testing.T) {
 }
 
 func TestService_IsValidPDF(t *testing.T) {
-	service := NewService(1024 * 1024)
+	// Create temp directory for test
+	tempDir, err := os.MkdirTemp("", "service_valid_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	service, err := NewService(1024*1024, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
 
 	tests := []struct {
 		name     string
@@ -264,7 +314,10 @@ func TestService_IsValidPDF(t *testing.T) {
 }
 
 func TestService_CountPDFsInDirectory(t *testing.T) {
-	service := NewService(1024 * 1024)
+	tempDir2, _ := os.MkdirTemp("", "test")
+	defer os.RemoveAll(tempDir2)
+	service, err := NewService(1024 * 1024, tempDir2)
+	if err != nil { t.Fatalf("Failed to create service: %v", err) }
 
 	// Create temp directory for test files
 	tempDir, err := os.MkdirTemp("", "service_count_test")
@@ -296,7 +349,10 @@ func TestService_CountPDFsInDirectory(t *testing.T) {
 }
 
 func TestService_FindPDFsInDirectory(t *testing.T) {
-	service := NewService(1024 * 1024)
+	tempDir2, _ := os.MkdirTemp("", "test")
+	defer os.RemoveAll(tempDir2)
+	service, err := NewService(1024 * 1024, tempDir2)
+	if err != nil { t.Fatalf("Failed to create service: %v", err) }
 
 	// Create temp directory for test files
 	tempDir, err := os.MkdirTemp("", "service_find_test")
@@ -335,7 +391,10 @@ func TestService_FindPDFsInDirectory(t *testing.T) {
 }
 
 func TestService_SearchByPattern(t *testing.T) {
-	service := NewService(1024 * 1024)
+	tempDir2, _ := os.MkdirTemp("", "test")
+	defer os.RemoveAll(tempDir2)
+	service, err := NewService(1024 * 1024, tempDir2)
+	if err != nil { t.Fatalf("Failed to create service: %v", err) }
 
 	// Create temp directory for test files
 	tempDir, err := os.MkdirTemp("", "service_pattern_test")
@@ -371,7 +430,17 @@ func TestService_SearchByPattern(t *testing.T) {
 }
 
 func TestService_GetSupportedImageFormats(t *testing.T) {
-	service := NewService(1024 * 1024)
+	// Create temp directory for test
+	tempDir, err := os.MkdirTemp("", "service_formats_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	service, err := NewService(1024*1024, tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
 
 	formats := service.GetSupportedImageFormats()
 	if len(formats) == 0 {
@@ -393,7 +462,10 @@ func TestService_GetSupportedImageFormats(t *testing.T) {
 }
 
 func TestService_PDFReadFile_ErrorHandling(t *testing.T) {
-	service := NewService(1024 * 1024)
+	tempDir2, _ := os.MkdirTemp("", "test")
+	defer os.RemoveAll(tempDir2)
+	service, err := NewService(1024 * 1024, tempDir2)
+	if err != nil { t.Fatalf("Failed to create service: %v", err) }
 
 	// Test with empty path
 	req := PDFReadFileRequest{
@@ -410,7 +482,10 @@ func TestService_PDFReadFile_ErrorHandling(t *testing.T) {
 }
 
 func TestService_PDFAssetsFile_ErrorHandling(t *testing.T) {
-	service := NewService(1024 * 1024)
+	tempDir2, _ := os.MkdirTemp("", "test")
+	defer os.RemoveAll(tempDir2)
+	service, err := NewService(1024 * 1024, tempDir2)
+	if err != nil { t.Fatalf("Failed to create service: %v", err) }
 
 	// Test with empty path
 	req := PDFAssetsFileRequest{
@@ -427,7 +502,10 @@ func TestService_PDFAssetsFile_ErrorHandling(t *testing.T) {
 }
 
 func TestService_PDFStatsFile_ErrorHandling(t *testing.T) {
-	service := NewService(1024 * 1024)
+	tempDir2, _ := os.MkdirTemp("", "test")
+	defer os.RemoveAll(tempDir2)
+	service, err := NewService(1024 * 1024, tempDir2)
+	if err != nil { t.Fatalf("Failed to create service: %v", err) }
 
 	// Test with empty path
 	req := PDFStatsFileRequest{

@@ -86,17 +86,14 @@ func runStdioMode(ctx context.Context, _ context.CancelFunc, server *mcp.Server)
 }
 
 func main() {
-	// Check for version flag before parsing other flags
-	for _, arg := range os.Args[1:] {
-		if arg == "-version" || arg == "--version" || arg == "-v" {
-			printVersion()
-			return
-		}
-	}
-
 	// Load configuration from flags first
 	cfg, err := config.LoadFromFlags()
 	if err != nil {
+		// Handle version request specially
+		if err.Error() == "version requested" {
+			printVersion()
+			return
+		}
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 

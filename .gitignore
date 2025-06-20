@@ -4,7 +4,10 @@
 *.dll
 *.so
 *.dylib
-./mcp-pdf-reader
+
+# Main binary (root directory only, preserves cmd/mcp-pdf-reader/ source)
+/mcp-pdf-reader
+/mcp-pdf-reader.exe
 
 
 # Test binary, built with `go test -c`
@@ -71,7 +74,7 @@ pids
 *.seed
 *.pid.lock
 
-# Cross-platform binaries
+# Cross-platform binaries (build artifacts)
 mcp-pdf-reader-*
 
 # Backup files

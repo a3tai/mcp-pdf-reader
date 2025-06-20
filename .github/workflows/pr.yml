@@ -133,7 +133,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           ./mcp-pdf-reader --help
-          timeout 5s ./mcp-pdf-reader -mode=server -pdfdir=. || true
+          timeout 5s ./mcp-pdf-reader -mode=server --dir=. || true
 
       - name: Test binary execution (Windows)
         if: runner.os == 'Windows'
@@ -150,7 +150,7 @@ jobs:
           if (Test-Path "mcp-pdf-reader.exe") {
             .\mcp-pdf-reader.exe --help
             # Windows timeout equivalent - run for 5 seconds then kill
-            $process = Start-Process -FilePath ".\mcp-pdf-reader.exe" -ArgumentList "-mode=server","-pdfdir=." -PassThru -WindowStyle Hidden
+            $process = Start-Process -FilePath ".\mcp-pdf-reader.exe" -ArgumentList "-mode=server","--dir=." -PassThru -WindowStyle Hidden
             Start-Sleep 5
             Stop-Process $process.Id -Force -ErrorAction SilentlyContinue
           } else {

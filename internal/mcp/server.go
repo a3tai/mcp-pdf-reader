@@ -111,6 +111,13 @@ func (s *Server) registerTools() {
 		),
 	)
 	s.mcpServer.AddTool(pdfStatsDirectoryTool, s.handlePDFStatsDirectory)
+
+	// Register PDF server info tool
+	pdfServerInfoTool := mcp.NewTool(
+		"pdf_server_info",
+		mcp.WithDescription("Get server information, available tools, directory contents, and usage guidance"),
+	)
+	s.mcpServer.AddTool(pdfServerInfoTool, s.handlePDFServerInfo)
 }
 
 // Handler functions
@@ -128,8 +135,24 @@ func (s *Server) handlePDFReadFile(ctx context.Context, request mcp.CallToolRequ
 
 	responseText := fmt.Sprintf("Successfully read PDF: %s\n", result.Path)
 	responseText += fmt.Sprintf("Pages: %d\n", result.Pages)
-	responseText += fmt.Sprintf("Size: %d bytes\n\n", result.Size)
-	responseText += "Content:\n"
+	responseText += fmt.Sprintf("Size: %d bytes\n", result.Size)
+	responseText += fmt.Sprintf("Content Type: %s\n", result.ContentType)
+	responseText += fmt.Sprintf("Has Images: %t\n", result.HasImages)
+	if result.HasImages {
+		responseText += fmt.Sprintf("Image Count: %d\n", result.ImageCount)
+	}
+
+	// Add guidance based on content type
+	switch result.ContentType {
+	case "scanned_images":
+		responseText += "\n🔍 RECOMMENDATION: This PDF appears to contain scanned images with little or no extractable text. Consider using 'pdf_assets_file' to extract the images.\n"
+	case "mixed":
+		responseText += "\n💡 INFO: This PDF contains both text and images. You may want to use 'pdf_assets_file' to extract the images as well.\n"
+	case "no_content":
+		responseText += "\n⚠️  WARNING: This PDF appears to have no readable content or images.\n"
+	}
+
+	responseText += "\nContent:\n"
 	responseText += result.Content
 
 	return mcp.NewToolResultText(responseText), nil
@@ -247,6 +270,17 @@ func (s *Server) handlePDFStatsDirectory(ctx context.Context, request mcp.CallTo
 	return mcp.NewToolResultText(responseText), nil
 }
 
+func (s *Server) handlePDFServerInfo(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	req := pdf.PDFServerInfoRequest{}
+	result, err := s.pdfService.PDFServerInfo(req, s.config.ServerName, s.config.Version, s.config.PDFDirectory)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	responseText := s.formatPDFServerInfoResult(result)
+	return mcp.NewToolResultText(responseText), nil
+}
+
 // Formatting methods
 func (s *Server) formatPDFSearchDirectoryResult(result *pdf.PDFSearchDirectoryResult) string {
 	text := fmt.Sprintf("Found %d PDF file(s) in directory: %s\n", result.TotalCount, result.Directory)
@@ -328,6 +362,49 @@ func (s *Server) formatPDFAssetsFileResult(result *pdf.PDFAssetsFileResult) stri
 			text += "\n"
 		}
 	}
+
+	return text
+}
+
+func (s *Server) formatPDFServerInfoResult(result *pdf.PDFServerInfoResult) string {
+	text := fmt.Sprintf("📋 %s v%s - Server Information\n", result.ServerName, result.Version)
+	text += fmt.Sprintf("📁 Default Directory: %s\n", result.DefaultDirectory)
+	text += fmt.Sprintf("📏 Max File Size: %d MB\n\n", result.MaxFileSize/(1024*1024))
+
+	// Directory contents
+	if len(result.DirectoryContents) > 0 {
+		text += fmt.Sprintf("📂 Directory Contents (%d PDF files found):\n", len(result.DirectoryContents))
+		for i, file := range result.DirectoryContents {
+			if i >= 10 { // Limit to first 10 files for readability
+				text += fmt.Sprintf("   ... and %d more files\n", len(result.DirectoryContents)-10)
+				break
+			}
+			text += fmt.Sprintf("   %d. %s (%d bytes)\n", i+1, file.Name, file.Size)
+		}
+		text += "\n"
+	} else {
+		text += "📂 Directory Contents: No PDF files found in default directory\n\n"
+	}
+
+	// Available tools
+	text += "🛠️  Available Tools:\n"
+	for _, tool := range result.AvailableTools {
+		text += fmt.Sprintf("\n• %s\n", tool.Name)
+		text += fmt.Sprintf("  Description: %s\n", tool.Description)
+		text += fmt.Sprintf("  Usage: %s\n", tool.Usage)
+		text += fmt.Sprintf("  Parameters: %s\n", tool.Parameters)
+	}
+
+	// Supported formats
+	if len(result.SupportedFormats) > 0 {
+		text += "\n🖼️  Supported Image Formats:\n"
+		for _, format := range result.SupportedFormats {
+			text += fmt.Sprintf("  • %s\n", format)
+		}
+	}
+
+	// Usage guidance
+	text += "\n" + result.UsageGuidance
 
 	return text
 }

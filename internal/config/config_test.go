@@ -38,11 +38,10 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("Expected default max file size to be 100MB, got %d", cfg.MaxFileSize)
 	}
 
-	// Test that PDF directory is set to a reasonable default
-	homeDir, _ := os.UserHomeDir()
-	expectedPDFDir := filepath.Join(homeDir, "Documents")
-	if cfg.PDFDirectory != expectedPDFDir {
-		t.Errorf("Expected default PDF directory to be '%s', got '%s'", expectedPDFDir, cfg.PDFDirectory)
+	// Test that PDF directory is set to current working directory by default
+	currentDir, _ := os.Getwd()
+	if cfg.PDFDirectory != currentDir {
+		t.Errorf("Expected default PDF directory to be '%s', got '%s'", currentDir, cfg.PDFDirectory)
 	}
 }
 

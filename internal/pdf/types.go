@@ -54,10 +54,13 @@ type PDFStatsDirectoryRequest struct {
 
 // PDFReadFileResult represents the result of a PDF read operation
 type PDFReadFileResult struct {
-	Content string `json:"content"`
-	Path    string `json:"path"`
-	Pages   int    `json:"pages"`
-	Size    int64  `json:"size"`
+	Content     string `json:"content"`
+	Path        string `json:"path"`
+	Pages       int    `json:"pages"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"content_type"` // "text", "scanned_images", "mixed", "no_content"
+	HasImages   bool   `json:"has_images"`   // Whether the PDF contains extractable images
+	ImageCount  int    `json:"image_count"`  // Number of images detected
 }
 
 // PDFAssetsFileResult represents the result of a PDF assets extraction operation
@@ -105,4 +108,29 @@ type PDFStatsDirectoryResult struct {
 	SmallestFileSize int64  `json:"smallest_file_size"`
 	SmallestFileName string `json:"smallest_file_name"`
 	AverageFileSize  int64  `json:"average_file_size"`
+}
+
+// PDFServerInfoRequest represents a request to get server information and capabilities
+type PDFServerInfoRequest struct {
+	// No parameters needed for server info
+}
+
+// PDFServerInfoResult represents server information and usage guidance
+type PDFServerInfoResult struct {
+	ServerName        string     `json:"server_name"`
+	Version           string     `json:"version"`
+	DefaultDirectory  string     `json:"default_directory"`
+	MaxFileSize       int64      `json:"max_file_size"`
+	AvailableTools    []ToolInfo `json:"available_tools"`
+	DirectoryContents []FileInfo `json:"directory_contents"`
+	UsageGuidance     string     `json:"usage_guidance"`
+	SupportedFormats  []string   `json:"supported_formats"`
+}
+
+// ToolInfo represents information about an available tool
+type ToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Usage       string `json:"usage"`
+	Parameters  string `json:"parameters"`
 }

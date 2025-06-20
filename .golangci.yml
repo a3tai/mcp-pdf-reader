@@ -273,6 +273,31 @@ issues:
       linters:
         - funlen
 
+    # Allow longer lines in usage messages and help text
+    - linters:
+        - lll
+      source: "fmt\\.Fprintf.*os\\.Stderr"
+
+    # Allow longer lines in string concatenation for user messages
+    - linters:
+        - lll
+      text: "responseText.*="
+
+    # Allow function length for configuration setup functions
+    - text: "Function '(setupUsageMessage|defineCommandLineFlags|bindFlagsToViper)' has too many statements"
+      linters:
+        - funlen
+
+    # Allow magic numbers for common file permissions and sizes
+    - linters:
+        - mnd
+      text: "Magic number: (644|755|0o644|0o755|8080|9090|1024)"
+
+    # Allow error checks to be ignored for viper configuration binding (non-critical)
+    - linters:
+        - errcheck
+      text: "Error return value of.*viper\\.BindPFlag.*is not checked"
+
   exclude-use-default: false
   exclude:
     # errcheck: Almost all programs ignore errors on these functions

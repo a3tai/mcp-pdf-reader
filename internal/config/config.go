@@ -2,10 +2,13 @@ package config
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 )
 
 const (
@@ -42,18 +45,17 @@ type Config struct {
 
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
-	homeDir, err := os.UserHomeDir()
+	currentDir, err := os.Getwd()
 	if err != nil {
-		// Fallback to current working directory if home directory cannot be determined
-		homeDir = "."
+		// Fallback to current directory if working directory cannot be determined
+		currentDir = "."
 	}
-	defaultPDFDir := filepath.Join(homeDir, "Documents")
 
 	return &Config{
 		Mode:         ModeStdio, // Default to stdio mode for MCP compatibility
 		Host:         DefaultHost,
 		Port:         DefaultPort,
-		PDFDirectory: defaultPDFDir,
+		PDFDirectory: currentDir,
 		Version:      "1.0.0",
 		ServerName:   "mcp-pdf-reader",
 		LogLevel:     DefaultLogLevel,
@@ -65,27 +67,28 @@ func DefaultConfig() *Config {
 func LoadFromFlags() (*Config, error) {
 	cfg := DefaultConfig()
 
-	// Define command line flags
-	flag.StringVar(&cfg.Mode, "mode", cfg.Mode, "Server mode: 'stdio' for MCP standard I/O, 'server' for HTTP server")
-	flag.StringVar(&cfg.Host, "host", cfg.Host, "Server host address (server mode only)")
-	flag.IntVar(&cfg.Port, "port", cfg.Port, "Server port (server mode only)")
-	flag.StringVar(&cfg.PDFDirectory, "pdfdir", cfg.PDFDirectory, "Directory containing PDF files")
-	flag.StringVar(&cfg.LogLevel, "loglevel", cfg.LogLevel, "Log level (debug, info, warn, error)")
-	flag.Int64Var(&cfg.MaxFileSize, "maxfilesize", cfg.MaxFileSize, "Maximum PDF file size in bytes")
+	setupViperEnvironment(cfg)
+	defineCommandLineFlags(cfg)
+	if err := bindFlagsToViper(); err != nil {
+		return nil, fmt.Errorf("failed to bind flags: %w", err)
+	}
+	setupUsageMessage()
 
-	// Custom usage message
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "\nMCP PDF Reader - A Model Context Protocol server for reading PDF files\n\n")
-		fmt.Fprintf(os.Stderr, "Options:\n")
-		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "Examples:\n")
-		fmt.Fprintf(os.Stderr, "  %s -pdfdir=/path/to/pdfs                    # stdio mode (default)\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s -mode=server -pdfdir=/path/to/pdfs      # server mode\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s -mode=server -host=0.0.0.0 -port=8081   # server on all interfaces\n", os.Args[0])
+	// Check for version flag before parsing
+	if err := checkVersionFlag(); err != nil {
+		return nil, err
 	}
 
-	flag.Parse()
+	pflag.Parse()
+
+	populateConfigFromViper(cfg)
+
+	// Expand paths if needed
+	if cfg.PDFDirectory != "" {
+		if expandedPath, err := filepath.Abs(cfg.PDFDirectory); err == nil {
+			cfg.PDFDirectory = expandedPath
+		}
+	}
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -93,6 +96,100 @@ func LoadFromFlags() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// setupViperEnvironment configures viper with environment variables and defaults
+func setupViperEnvironment(cfg *Config) {
+	// Set environment variable prefix
+	viper.SetEnvPrefix("MCP_PDF")
+	viper.AutomaticEnv()
+	// Replace dashes with underscores for environment variables
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+
+	// Define flags with Viper
+	viper.SetDefault("mode", cfg.Mode)
+	viper.SetDefault("host", cfg.Host)
+	viper.SetDefault("port", cfg.Port)
+	viper.SetDefault("dir", cfg.PDFDirectory)
+	viper.SetDefault("log-level", cfg.LogLevel)
+	viper.SetDefault("max-file-size", cfg.MaxFileSize)
+}
+
+// defineCommandLineFlags sets up all command line flags
+func defineCommandLineFlags(cfg *Config) {
+	pflag.String("mode", cfg.Mode, "Server mode: 'stdio' for MCP standard I/O, 'server' for HTTP server")
+	pflag.String("host", cfg.Host, "Server host address (server mode only)")
+	pflag.Int("port", cfg.Port, "Server port (server mode only)")
+	pflag.String("dir", cfg.PDFDirectory, "Directory containing PDF files")
+	pflag.String("log-level", cfg.LogLevel, "Log level (debug, info, warn, error)")
+	pflag.Int64("max-file-size", cfg.MaxFileSize, "Maximum PDF file size in bytes")
+}
+
+// bindFlagsToViper binds command line flags to viper configuration
+func bindFlagsToViper() error {
+	if err := viper.BindPFlag("mode", pflag.Lookup("mode")); err != nil {
+		return fmt.Errorf("failed to bind mode flag: %w", err)
+	}
+	if err := viper.BindPFlag("host", pflag.Lookup("host")); err != nil {
+		return fmt.Errorf("failed to bind host flag: %w", err)
+	}
+	if err := viper.BindPFlag("port", pflag.Lookup("port")); err != nil {
+		return fmt.Errorf("failed to bind port flag: %w", err)
+	}
+	if err := viper.BindPFlag("dir", pflag.Lookup("dir")); err != nil {
+		return fmt.Errorf("failed to bind dir flag: %w", err)
+	}
+	if err := viper.BindPFlag("log-level", pflag.Lookup("log-level")); err != nil {
+		return fmt.Errorf("failed to bind log-level flag: %w", err)
+	}
+	if err := viper.BindPFlag("max-file-size", pflag.Lookup("max-file-size")); err != nil {
+		return fmt.Errorf("failed to bind max-file-size flag: %w", err)
+	}
+	return nil
+}
+
+// setupUsageMessage configures the custom usage message
+func setupUsageMessage() {
+	pflag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "\nMCP PDF Reader - A Model Context Protocol server for reading PDF files\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		pflag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  %s                                         "+
+			"# stdio mode, current directory (default)\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s --dir=/path/to/pdfs                     "+
+			"# stdio mode with custom directory\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s --mode=server --dir=/path/to/pdfs       # server mode\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s --mode=server --host=0.0.0.0 --port=8081 # server on all interfaces\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "\nEnvironment Variables:\n")
+		fmt.Fprintf(os.Stderr, "  MCP_PDF_MODE        Server mode\n")
+		fmt.Fprintf(os.Stderr, "  MCP_PDF_HOST        Server host\n")
+		fmt.Fprintf(os.Stderr, "  MCP_PDF_PORT        Server port\n")
+		fmt.Fprintf(os.Stderr, "  MCP_PDF_DIR         PDF directory\n")
+		fmt.Fprintf(os.Stderr, "  MCP_PDF_LOG_LEVEL    Log level\n")
+		fmt.Fprintf(os.Stderr, "  MCP_PDF_MAX_FILE_SIZE Maximum file size\n")
+	}
+}
+
+// checkVersionFlag checks if version flag was requested
+func checkVersionFlag() error {
+	for _, arg := range os.Args[1:] {
+		if arg == "-version" || arg == "--version" || arg == "-v" {
+			return fmt.Errorf("version requested")
+		}
+	}
+	return nil
+}
+
+// populateConfigFromViper fills the config struct with values from viper
+func populateConfigFromViper(cfg *Config) {
+	cfg.Mode = viper.GetString("mode")
+	cfg.Host = viper.GetString("host")
+	cfg.Port = viper.GetInt("port")
+	cfg.PDFDirectory = viper.GetString("dir")
+	cfg.LogLevel = viper.GetString("log-level")
+	cfg.MaxFileSize = viper.GetInt64("max-file-size")
 }
 
 // Validate checks if the configuration is valid

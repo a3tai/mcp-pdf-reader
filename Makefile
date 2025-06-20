@@ -103,7 +103,7 @@ install:
 	@echo "$(BINARY_NAME) has been installed to $(INSTALL_DIR)"
 	@echo "Make sure $(INSTALL_DIR) is in your PATH (usually it is by default)"
 	@echo ""
-	@echo "You can now use: $(BINARY_NAME) -pdfdir=/path/to/pdfs"
+	@echo "You can now use: $(BINARY_NAME) --dir=/path/to/pdfs"
 
 # Uninstall binary from Go bin directory
 .PHONY: uninstall
@@ -116,13 +116,13 @@ uninstall:
 .PHONY: run
 run: build
 	@echo "Starting $(BINARY_NAME) in stdio mode with PDF directory: $(DEFAULT_PDF_DIR)"
-	./$(BINARY_NAME) -pdfdir=$(DEFAULT_PDF_DIR)
+	./$(BINARY_NAME) --dir=$(DEFAULT_PDF_DIR)
 
 # Run the server in HTTP server mode
 .PHONY: run-server
 run-server: build
 	@echo "Starting $(BINARY_NAME) in server mode with PDF directory: $(DEFAULT_PDF_DIR)"
-	./$(BINARY_NAME) -mode=server -pdfdir=$(DEFAULT_PDF_DIR)
+	./$(BINARY_NAME) --mode=server --dir=$(DEFAULT_PDF_DIR)
 
 # Run with custom PDF directory (stdio mode)
 .PHONY: run-custom
@@ -132,7 +132,7 @@ run-custom: build
 		exit 1; \
 	fi
 	@echo "Starting $(BINARY_NAME) in stdio mode with PDF directory: $(DIR)"
-	./$(BINARY_NAME) -pdfdir=$(DIR)
+	./$(BINARY_NAME) --dir=$(DIR)
 
 # Run with custom PDF directory (server mode)
 .PHONY: run-server-custom
@@ -142,7 +142,7 @@ run-server-custom: build
 		exit 1; \
 	fi
 	@echo "Starting $(BINARY_NAME) in server mode with PDF directory: $(DIR)"
-	./$(BINARY_NAME) -mode=server -pdfdir=$(DIR)
+	./$(BINARY_NAME) --mode=server --dir=$(DIR)
 
 # Cross-compile for multiple platforms
 .PHONY: build-all
@@ -258,8 +258,8 @@ help:
 	@echo ""
 	@echo "Examples:"
 	@echo "  make install                          # Install binary using go install"
-	@echo "  make run                              # Run in stdio mode with ~/Documents"
-	@echo "  make run-server                       # Run in HTTP server mode"
+	@echo "  make run                              # Run in stdio mode with current directory"
+	@echo "  make run-server                       # Run in HTTP server mode with current directory"
 	@echo "  make run-custom DIR=/path/to/pdfs     # Run stdio mode with custom dir"
 	@echo "  make run-server-custom DIR=/path      # Run server mode with custom dir"
 	@echo "  make test                             # Run all tests"

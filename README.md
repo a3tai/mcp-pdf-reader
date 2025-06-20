@@ -11,7 +11,11 @@ A robust **open source Model Context Protocol (MCP) server** for reading and ana
 
 ## 🚀 Features
 
-- **📄 PDF Processing**: Read, validate, and extract text from PDF documents
+- **🧠 Smart Content Analysis**: Intelligent PDF content type detection (text, scanned images, mixed, or no content)
+- **📋 Server Intelligence**: New `pdf_server_info` tool provides comprehensive setup guidance and directory insights
+- **📄 Enhanced PDF Processing**: Read, validate, and extract text with automatic recommendations for next steps
+- **🎯 Workflow Guidance**: Context-aware suggestions on when to use asset extraction based on content analysis
+- **🖼️ Visual Asset Extraction**: Detect and extract images from PDFs with format identification
 - **🔍 Smart Search**: Find PDF files with fuzzy search capabilities
 - **📊 Statistics**: Get comprehensive directory and file statistics
 - **🔄 Dual Mode Support**:
@@ -86,14 +90,14 @@ go install github.com/a3tai/mcp-pdf-reader/cmd/mcp-pdf-reader@latest
 Perfect for AI assistants and editors like Zed:
 
 ```bash
-# Use current directory for PDFs
+# Use current directory for PDFs (default)
 mcp-pdf-reader
 
 # Specify PDF directory
-mcp-pdf-reader -pdfdir=/path/to/documents
+mcp-pdf-reader --dir=/path/to/documents
 
 # Debug mode
-mcp-pdf-reader -pdfdir=/path/to/documents -loglevel=debug
+mcp-pdf-reader --dir=/path/to/documents --log-level=debug
 ```
 
 ### HTTP Server Mode
@@ -102,10 +106,10 @@ For web applications and REST API access:
 
 ```bash
 # Start HTTP server
-mcp-pdf-reader -mode=server -pdfdir=/path/to/documents
+mcp-pdf-reader --mode=server --dir=/path/to/documents
 
 # Custom host and port
-mcp-pdf-reader -mode=server -host=0.0.0.0 -port=9090 -pdfdir=/docs
+mcp-pdf-reader --mode=server --host=0.0.0.0 --port=9090 --dir=/docs
 
 # Health check
 curl http://localhost:8080/health
@@ -115,42 +119,49 @@ curl http://localhost:8080/health
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-mode` | `stdio` | Server mode: `stdio` or `server` |
-| `-pdfdir` | `~/Documents` | Directory containing PDF files |
-| `-host` | `127.0.0.1` | Server host (server mode only) |
-| `-port` | `8080` | Server port (server mode only) |
-| `-loglevel` | `info` | Log level: `debug`, `info`, `warn`, `error` |
-| `-maxfilesize` | `104857600` | Maximum PDF file size in bytes (100MB) |
+| `--mode` | `stdio` | Server mode: `stdio` or `server` |
+| `--dir` | current directory | Directory containing PDF files |
+| `--host` | `127.0.0.1` | Server host (server mode only) |
+| `--port` | `8080` | Server port (server mode only) |
+| `--log-level` | `info` | Log level: `debug`, `info`, `warn`, `error` |
+| `--max-file-size` | `104857600` | Maximum PDF file size in bytes (100MB) |
 
 ## ⚡ Quick Reference
 
 ### Common Commands
 
 ```bash
-# Basic usage (stdio mode for MCP clients)
-mcp-pdf-reader -pdfdir=/path/to/pdfs
+# Basic usage (stdio mode for MCP clients) - uses current directory
+mcp-pdf-reader
+
+# Specify custom directory
+mcp-pdf-reader --dir=/path/to/pdfs
 
 # Server mode for testing/debugging
-mcp-pdf-reader -mode=server -pdfdir=./docs
+mcp-pdf-reader --mode=server --dir=./docs
 
 # Custom port and host
-mcp-pdf-reader -mode=server -host=0.0.0.0 -port=9090
+mcp-pdf-reader --mode=server --host=0.0.0.0 --port=9090
 
 # Debug mode
-mcp-pdf-reader -mode=server -loglevel=debug -pdfdir=./docs
+mcp-pdf-reader --mode=server --log-level=debug --dir=./docs
 
 # Larger file size limit (200MB)
-mcp-pdf-reader -maxfilesize=209715200 -pdfdir=./docs
+mcp-pdf-reader --max-file-size=209715200 --dir=./docs
+
+# Environment variables (alternative to flags)
+MCP_PDF_DIR=/path/to/pdfs mcp-pdf-reader
+MCP_PDF_MODE=server MCP_PDF_PORT=9090 mcp-pdf-reader
 ```
 
 ### Quick Setup for Popular Editors
 
 | Editor | Config File | Configuration |
 |--------|-------------|---------------|
-| **Zed** | `~/.config/zed/settings.json` | `"mcp-pdf-reader": {"command": {"path": "mcp-pdf-reader", "args": ["-pdfdir=${workspaceFolder}"]}}` |
-| **Cursor** | `~/.cursor/settings.json` | `"mcp-pdf-reader": {"command": "mcp-pdf-reader", "args": ["-pdfdir=${workspaceFolder}"]}` |
-| **Claude Desktop** | `~/Library/Application Support/Claude/claude_desktop_config.json` | `"mcp-pdf-reader": {"command": "mcp-pdf-reader", "args": ["-pdfdir=/path/to/docs"]}` |
-| **VS Code** | `.vscode/settings.json` | `"claude.mcpServers": {"mcp-pdf-reader": {"command": "mcp-pdf-reader", "args": ["-pdfdir=${workspaceFolder}"]}}` |
+| **Zed** | `~/.config/zed/settings.json` | `"mcp-pdf-reader": {"command": {"path": "mcp-pdf-reader", "args": []}}` |
+| **Cursor** | `~/.cursor/settings.json` | `"mcp-pdf-reader": {"command": "mcp-pdf-reader", "args": ["--dir=${workspaceFolder}"]}` |
+| **Claude Desktop** | `~/Library/Application Support/Claude/claude_desktop_config.json` | `"mcp-pdf-reader": {"command": "mcp-pdf-reader", "args": ["--dir=/path/to/docs"]}` |
+| **VS Code** | `.vscode/settings.json` | `"claude.mcpServers": {"mcp-pdf-reader": {"command": "mcp-pdf-reader", "args": ["--dir=${workspaceFolder}"]}}` |
 
 ### Testing Your Setup
 
@@ -252,6 +263,76 @@ Get statistics about PDF files in a directory.
   "directory": "/home/user/documents"
 }
 ```
+
+## 🔥 Enhanced Features
+
+### Smart Content Analysis
+The PDF reader now provides intelligent content type detection and recommendations:
+
+#### `pdf_server_info` - Get Started Faster
+A new tool that provides comprehensive server information and usage guidance.
+
+**What it provides:**
+- 📋 Server capabilities and configuration
+- 📁 Current directory contents (PDF files found)
+- 🛠️ Complete list of available tools with usage guidance
+- 📖 Step-by-step workflow recommendations
+- 🖼️ Supported image formats for asset extraction
+
+**Usage:**
+```json
+{
+  "name": "pdf_server_info",
+  "arguments": {}
+}
+```
+
+**Why use it:** Start here to understand what PDFs are available and how to best analyze them.
+
+#### Enhanced PDF Reading with Content Intelligence
+The `pdf_read_file` tool now provides smart content analysis:
+
+**Content Type Detection:**
+- 📝 **`text`** - PDF contains readable text content
+- 🖼️ **`scanned_images`** - PDF contains scanned images with minimal text
+- 🔀 **`mixed`** - PDF contains both text and images
+- ❌ **`no_content`** - PDF appears empty or unreadable
+
+**Smart Recommendations:**
+- ✅ **Automatic guidance** on whether to use `pdf_assets_file`
+- 📊 **Image count detection** - know if images are present before extraction
+- 🎯 **Next step suggestions** based on content type
+
+**Enhanced Response Format:**
+```
+Successfully read PDF: /path/to/document.pdf
+Pages: 15
+Size: 2458392 bytes
+Content Type: mixed
+Has Images: true
+Image Count: 8
+
+💡 INFO: This PDF contains both text and images. You may want to use 'pdf_assets_file' to extract the images as well.
+
+Content:
+[extracted text content...]
+```
+
+### Intelligent Workflow Guidance
+
+The system now provides contextual recommendations:
+
+1. **For text-based PDFs**: Content is ready to use, no further action needed
+2. **For scanned documents**: Recommends using `pdf_assets_file` to extract images
+3. **For mixed content**: Suggests optional image extraction based on your needs
+4. **For problematic files**: Provides specific troubleshooting guidance
+
+### Better Error Handling and User Experience
+
+- 🔍 **Proactive validation** - tools suggest when files might not be readable
+- 📋 **Rich context** - understand your PDF directory contents upfront
+- 🎯 **Targeted recommendations** - know which tools to use when
+- 📖 **Comprehensive guidance** - built-in usage instructions and examples
 
 ## 🎨 Integration Examples
 

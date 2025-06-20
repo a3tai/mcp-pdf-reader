@@ -131,7 +131,7 @@ Transform how AI systems interact with PDF content by providing:
 - **Quality Assurance**: Comprehensive testing and validation
 
 ### Implementation Strategy
-- **PDF Specification Compliance**: Follow official PDF standards
+- **PDF Specification Compliance**: Direct implementation from official Adobe PDF 1.4 and 1.7 specifications (available in `docs/` directory)
 - **Stream-Based Processing**: Efficient handling of large documents
 - **Coordinate System Management**: Consistent spatial referencing
 - **Content Stream Parsing**: Direct PDF content interpretation
@@ -201,13 +201,19 @@ Transform how AI systems interact with PDF content by providing:
 - **Performance Comparisons**: Open benchmark results
 - **Real-World Validation**: Community use case verification
 
-## Getting Started
+### Getting Started
+
+### Development Resources
+The project includes valuable reference materials for implementation:
+- **Official PDF Specifications**: Complete Adobe PDF 1.4 (9.4MB) and PDF 1.7 (22.5MB) specifications in `docs/` directory
+- **Authoritative Reference**: Direct access to official technical documentation for all PDF features
+- **Implementation Guidance**: Detailed sections covering content streams, coordinate systems, and object types
 
 ### Current Development
 The enhancement work is being developed on feature branches with regular progress updates. Each phase will include:
 
-1. **Design Documentation**: Detailed technical specifications
-2. **Implementation**: Code development with comprehensive testing
+1. **Design Documentation**: Detailed technical specifications based on official PDF standards
+2. **Implementation**: Code development with comprehensive testing against PDF specification
 3. **Validation**: Real-world testing and performance evaluation
 4. **Integration**: Merge with main branch and release preparation
 

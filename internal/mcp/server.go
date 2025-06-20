@@ -4,18 +4,22 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/a3tai/mcp-pdf-reader/internal/config"
+	"github.com/a3tai/mcp-pdf-reader/internal/intelligence"
 	"github.com/a3tai/mcp-pdf-reader/internal/pdf"
+	"github.com/a3tai/mcp-pdf-reader/internal/pdf/extraction"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
 // Server represents the MCP server instance
 type Server struct {
-	config     *config.Config
-	pdfService *pdf.Service
-	mcpServer  *server.MCPServer
+	config           *config.Config
+	pdfService       *pdf.Service
+	mcpServer        *server.MCPServer
+	documentAnalyzer *intelligence.DocumentAnalyzer
 }
 
 // NewServer creates a new MCP server instance
@@ -32,9 +36,10 @@ func NewServer(cfg *config.Config, pdfService *pdf.Service) (*Server, error) {
 	)
 
 	s := &Server{
-		config:     cfg,
-		pdfService: pdfService,
-		mcpServer:  mcpServer,
+		config:           cfg,
+		pdfService:       pdfService,
+		mcpServer:        mcpServer,
+		documentAnalyzer: intelligence.NewDocumentAnalyzer(),
 	}
 
 	// Register tools
@@ -186,6 +191,20 @@ func (s *Server) registerExtractionTools() {
 		),
 	)
 	s.mcpServer.AddTool(pdfQueryContentTool, s.handlePDFQueryContent)
+
+	// Register PDF analyze document tool
+	pdfAnalyzeDocumentTool := mcp.NewTool(
+		"pdf_analyze_document",
+		mcp.WithDescription("Perform comprehensive document analysis including type classification, structure detection, quality assessment, and insights generation"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Full path to the PDF file"),
+		),
+		mcp.WithString("config",
+			mcp.Description("JSON string with analysis configuration options"),
+		),
+	)
+	s.mcpServer.AddTool(pdfAnalyzeDocumentTool, s.handlePDFAnalyzeDocument)
 }
 
 // registerUtilityTools registers utility and information tools
@@ -623,7 +642,220 @@ func (s *Server) handlePDFGetMetadata(ctx context.Context, request mcp.CallToolR
 	return mcp.NewToolResultText(responseText), nil
 }
 
+func (s *Server) handlePDFAnalyzeDocument(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// Get optional config
+	args := request.GetArguments()
+	config := pdf.ExtractionConfig{}
+	if configStr, ok := args["config"].(string); ok && configStr != "" {
+		// For now, just use default config
+		// TODO: Parse JSON config string when needed
+		config = pdf.ExtractionConfig{}
+	}
+
+	// Extract structured content from the PDF first
+	extractReq := pdf.PDFExtractStructuredRequest{
+		Path:   path,
+		Mode:   string(extraction.ModeComplete),
+		Config: config,
+	}
+
+	extractResult, err := s.pdfService.ExtractStructured(extractReq)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to extract content for analysis: %v", err)), nil
+	}
+
+	// Convert extraction result to content elements
+	elements, err := s.convertToContentElements(extractResult)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to convert extracted content: %v", err)), nil
+	}
+
+	// Perform document analysis
+	analysis, err := s.documentAnalyzer.Analyze(elements)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Document analysis failed: %v", err)), nil
+	}
+
+	// Format and return the analysis results
+	responseText := s.formatDocumentAnalysisResult(analysis)
+	return mcp.NewToolResultText(responseText), nil
+}
+
+// convertToContentElements converts PDF extraction result to content elements for analysis
+func (s *Server) convertToContentElements(extractResult *pdf.PDFExtractResult) ([]extraction.ContentElement, error) {
+	var elements []extraction.ContentElement
+
+	// Convert each element from the extraction result
+	for _, elem := range extractResult.Elements {
+		// Convert PDF Rectangle to extraction BoundingBox
+		boundingBox := extraction.BoundingBox{
+			LowerLeft: extraction.Coordinate{
+				X: elem.BoundingBox.X,
+				Y: elem.BoundingBox.Y,
+			},
+			UpperRight: extraction.Coordinate{
+				X: elem.BoundingBox.X + elem.BoundingBox.Width,
+				Y: elem.BoundingBox.Y + elem.BoundingBox.Height,
+			},
+			Width:  elem.BoundingBox.Width,
+			Height: elem.BoundingBox.Height,
+		}
+
+		contentElement := extraction.ContentElement{
+			ID:          elem.ID,
+			Type:        extraction.ContentType(elem.Type),
+			PageNumber:  elem.PageNumber,
+			BoundingBox: boundingBox,
+			Content:     elem.Content,
+			Properties:  elem.Properties,
+			Confidence:  elem.Confidence,
+		}
+		elements = append(elements, contentElement)
+	}
+
+	return elements, nil
+}
+
 // Formatting methods
+func (s *Server) formatDocumentAnalysisResult(analysis *intelligence.DocumentAnalysis) string {
+	text := "# Document Analysis Report\n\n"
+
+	// Document classification
+	text += fmt.Sprintf("**Document Type:** %s\n", analysis.Type)
+	text += fmt.Sprintf("**Analysis Version:** %s\n", analysis.Metadata.AnalysisVersion)
+	text += fmt.Sprintf("**Processing Time:** %v\n\n", analysis.Metadata.ProcessingTime)
+
+	// Content statistics
+	stats := analysis.Statistics
+	text += "## Content Statistics\n\n"
+	text += fmt.Sprintf("- **Pages:** %d\n", stats.PageCount)
+	text += fmt.Sprintf("- **Words:** %d\n", stats.WordCount)
+	text += fmt.Sprintf("- **Characters:** %d\n", stats.CharacterCount)
+	text += fmt.Sprintf("- **Paragraphs:** %d\n", stats.ParagraphCount)
+	text += fmt.Sprintf("- **Sentences:** %d\n", stats.SentenceCount)
+	text += fmt.Sprintf("- **Reading Time:** %.1f minutes\n", stats.ReadingTime)
+
+	if stats.ImageCount > 0 {
+		text += fmt.Sprintf("- **Images:** %d\n", stats.ImageCount)
+	}
+	if stats.TableCount > 0 {
+		text += fmt.Sprintf("- **Tables:** %d\n", stats.TableCount)
+	}
+	if stats.FormFieldCount > 0 {
+		text += fmt.Sprintf("- **Form Fields:** %d\n", stats.FormFieldCount)
+	}
+	if stats.HeaderCount > 0 {
+		text += fmt.Sprintf("- **Headers:** %d\n", stats.HeaderCount)
+	}
+	if stats.ListCount > 0 {
+		text += fmt.Sprintf("- **Lists:** %d\n", stats.ListCount)
+	}
+
+	// Content density
+	if len(stats.ContentDensity) > 0 {
+		text += "\n### Content Density\n"
+		for metric, value := range stats.ContentDensity {
+			text += fmt.Sprintf("- **%s:** %.1f\n", metric, value)
+		}
+	}
+
+	// Document structure
+	if len(analysis.Sections) > 0 {
+		text += "\n## Document Structure\n\n"
+		for i, section := range analysis.Sections {
+			text += fmt.Sprintf("### %d. %s\n", i+1, section.Title)
+			if section.Type != "" {
+				text += fmt.Sprintf("**Type:** %s  \n", section.Type)
+			}
+			text += fmt.Sprintf("**Level:** %d  \n", section.Level)
+			if section.PageStart == section.PageEnd {
+				text += fmt.Sprintf("**Page:** %d  \n", section.PageStart)
+			} else {
+				text += fmt.Sprintf("**Pages:** %d-%d  \n", section.PageStart, section.PageEnd)
+			}
+
+			// Show content preview
+			if section.Content != "" {
+				preview := section.Content
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				text += fmt.Sprintf("**Content:** %s\n", preview)
+			}
+
+			// Show subsections
+			if len(section.Subsections) > 0 {
+				text += fmt.Sprintf("**Subsections:** %d\n", len(section.Subsections))
+			}
+			text += "\n"
+		}
+	}
+
+	// Quality metrics
+	quality := analysis.Quality
+	text += "## Quality Assessment\n\n"
+	text += fmt.Sprintf("- **Overall Score:** %.2f/1.0\n", quality.OverallScore)
+	text += fmt.Sprintf("- **Readability:** %.2f/1.0\n", quality.ReadabilityScore)
+	text += fmt.Sprintf("- **Completeness:** %.2f/1.0\n", quality.CompletenessScore)
+	text += fmt.Sprintf("- **Consistency:** %.2f/1.0\n", quality.ConsistencyScore)
+	text += fmt.Sprintf("- **Structure:** %.2f/1.0\n", quality.StructureScore)
+	text += fmt.Sprintf("- **Accessibility:** %.2f/1.0\n", quality.AccessibilityScore)
+
+	// Quality issues
+	if len(quality.IssuesFound) > 0 {
+		text += "\n### Quality Issues\n"
+		for _, issue := range quality.IssuesFound {
+			text += fmt.Sprintf("- **%s** (%s): %s\n", issue.Type, issue.Severity, issue.Description)
+			if issue.Suggestion != "" {
+				text += fmt.Sprintf("  *Suggestion: %s*\n", issue.Suggestion)
+			}
+		}
+	}
+
+	// Positive indicators
+	if len(quality.PositiveIndicators) > 0 {
+		text += "\n### Positive Aspects\n"
+		for _, indicator := range quality.PositiveIndicators {
+			text += fmt.Sprintf("- %s\n", indicator)
+		}
+	}
+
+	// Suggestions for improvement
+	if len(analysis.Suggestions) > 0 {
+		text += "\n## Suggestions for Improvement\n\n"
+		for i, suggestion := range analysis.Suggestions {
+			text += fmt.Sprintf("%d. %s\n", i+1, suggestion)
+		}
+	}
+
+	// Processing metadata
+	if len(analysis.Metadata.ComponentsUsed) > 0 {
+		text += "\n## Analysis Details\n\n"
+		text += fmt.Sprintf("**Components Used:** %s\n", strings.Join(analysis.Metadata.ComponentsUsed, ", "))
+	}
+
+	if len(analysis.Metadata.Warnings) > 0 {
+		text += "\n### Warnings\n"
+		for _, warning := range analysis.Metadata.Warnings {
+			text += fmt.Sprintf("- %s\n", warning)
+		}
+	}
+
+	if len(analysis.Metadata.Errors) > 0 {
+		text += "\n### Errors\n"
+		for _, error := range analysis.Metadata.Errors {
+			text += fmt.Sprintf("- %s\n", error)
+		}
+	}
+
+	return text
+}
+
 func (s *Server) formatPDFSearchDirectoryResult(result *pdf.PDFSearchDirectoryResult) string {
 	text := fmt.Sprintf("Found %d PDF file(s) in directory: %s\n", result.TotalCount, result.Directory)
 	if result.SearchQuery != "" {

@@ -1,0 +1,39 @@
+# Task ID: 4
+# Title: Implement Coordinate System and Positioned Text Extraction
+# Status: done
+# Dependencies: 3
+# Priority: high
+# Description: Add coordinate tracking, transformation matrix handling, and positioned text extraction with bounding boxes and formatting information
+# Details:
+Enhance text extraction with positioning:
+
+```go
+// internal/pdf/coordinates.go
+type TransformMatrix [6]float64
+
+func (tm TransformMatrix) Transform(x, y float64) (float64, float64) {
+    // Apply transformation matrix
+    return tm[0]*x + tm[2]*y + tm[4], tm[1]*x + tm[3]*y + tm[5]
+}
+
+// pkg/models/text.go
+type ExtractedText struct {
+    Text   string      `json:"text"`
+    Page   int         `json:"page"`
+    Bounds BoundingBox `json:"bounds"`
+    Font   FontInfo    `json:"font"`
+}
+
+// internal/extractors/positioned_text.go
+func ExtractStructuredText(page *PDFPage) ([]ExtractedText, error) {
+    // Track current transformation matrix
+    // Calculate absolute positions
+    // Group into words/lines
+    // Preserve font information
+}
+```
+
+Implement pdf_extract_structured MCP tool.
+
+# Test Strategy:
+Validate coordinate accuracy by extracting known positioned elements. Test transformation matrix calculations. Verify bounding boxes align with visual representation.

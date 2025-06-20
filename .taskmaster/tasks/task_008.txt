@@ -1,0 +1,41 @@
+# Task ID: 8
+# Title: Develop Table Detection Algorithm
+# Status: done
+# Dependencies: 5
+# Priority: medium
+# Description: Implement spatial analysis algorithms to detect and extract table structures with rows, columns, and cell content
+# Details:
+Detect tables using spatial analysis:
+
+```go
+// internal/extractors/tables.go
+type TableDetector struct {
+    minCellGap   float64
+    alignTolerance float64
+}
+
+func (td *TableDetector) DetectTables(texts []ExtractedText) ([]Table, error) {
+    // 1. Find aligned text clusters
+    // 2. Detect column boundaries
+    // 3. Identify row separations
+    // 4. Build cell matrix
+    // 5. Handle merged cells
+}
+
+// pkg/models/table.go
+type Table struct {
+    Page       int         `json:"page"`
+    Bounds     BoundingBox `json:"bounds"`
+    Rows       int         `json:"rows"`
+    Columns    int         `json:"columns"`
+    Cells      [][]Cell    `json:"cells"`
+    Confidence float64     `json:"confidence"`
+}
+
+// Use heuristics: vertical alignment, consistent spacing, grid patterns
+```
+
+Implement pdf_extract_tables MCP tool.
+
+# Test Strategy:
+Test with various table layouts: simple grids, merged cells, nested tables. Measure detection accuracy and confidence scores. Compare with ground truth annotations.

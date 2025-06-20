@@ -1,0 +1,313 @@
+# Task ID: 17
+# Title: Fix GitHub Actions Release Workflow for Tag-Based Releases
+# Status: done
+# Dependencies: 16
+# Priority: high
+# Description: Update the GitHub Actions release workflow to properly handle tag-triggered releases by replacing existing release information, automatically generating release notes from commit history between tags, and implementing proper draft/pre-release state management.
+# Details:
+Implement comprehensive fixes to the GitHub Actions release workflow to handle tag-based releases properly:
+
+```yaml
+# .github/workflows/release.yml
+name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create_release.outputs.id }}
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for changelog generation
+
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 $CURRENT_TAG^ 2>/dev/null || echo "")
+          echo "current_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
+          echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          CURRENT_TAG=${{ steps.prev_tag.outputs.current_tag }}
+          PREVIOUS_TAG=${{ steps.prev_tag.outputs.previous_tag }}
+          
+          # Generate changelog from commits
+          if [ -z "$PREVIOUS_TAG" ]; then
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --reverse)
+          else
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --reverse ${PREVIOUS_TAG}..${CURRENT_TAG})
+          fi
+          
+          # Group commits by type
+          FEATURES=$(echo "$CHANGELOG" | grep -E "^- (feat|feature):" || true)
+          FIXES=$(echo "$CHANGELOG" | grep -E "^- (fix|bugfix):" || true)
+          DOCS=$(echo "$CHANGELOG" | grep -E "^- (docs|documentation):" || true)
+          OTHER=$(echo "$CHANGELOG" | grep -vE "^- (feat|feature|fix|bugfix|docs|documentation):" || true)
+          
+          # Build release notes
+          NOTES="## What's Changed"
+          
+          if [ -n "$FEATURES" ]; then
+            NOTES="$NOTES\n\n### 🚀 Features\n$FEATURES"
+          fi
+          
+          if [ -n "$FIXES" ]; then
+            NOTES="$NOTES\n\n### 🐛 Bug Fixes\n$FIXES"
+          fi
+          
+          if [ -n "$DOCS" ]; then
+            NOTES="$NOTES\n\n### 📚 Documentation\n$DOCS"
+          fi
+          
+          if [ -n "$OTHER" ]; then
+            NOTES="$NOTES\n\n### 🔧 Other Changes\n$OTHER"
+          fi
+          
+          # Add comparison link
+          if [ -n "$PREVIOUS_TAG" ]; then
+            NOTES="$NOTES\n\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${CURRENT_TAG}"
+          fi
+          
+          # Save to file to handle multiline content
+          echo -e "$NOTES" > release_notes.md
+          echo "notes_file=release_notes.md" >> $GITHUB_OUTPUT
+
+      - name: Check if release exists
+        id: check_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${{ steps.prev_tag.outputs.current_tag }}
+          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/$TAG --jq '.id' 2>/dev/null || echo "")
+          echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
+          echo "exists=$([[ -n "$RELEASE_ID" ]] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+
+      - name: Delete existing release
+        if: steps.check_release.outputs.exists == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api -X DELETE repos/${{ github.repository }}/releases/${{ steps.check_release.outputs.release_id }}
+          echo "Deleted existing release for tag ${{ steps.prev_tag.outputs.current_tag }}"
+
+      - name: Determine release type
+        id: release_type
+        run: |
+          TAG=${{ steps.prev_tag.outputs.current_tag }}
+          
+          # Check if pre-release (contains alpha, beta, rc, etc.)
+          if [[ "$TAG" =~ -(alpha|beta|rc|pre|preview|dev)\. ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "draft=false" >> $GITHUB_OUTPUT
+          # Check if draft (contains draft or ends with -draft)
+          elif [[ "$TAG" =~ -draft$ ]] || [[ "$TAG" =~ -draft\. ]]; then
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+            echo "draft=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+            echo "draft=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.prev_tag.outputs.current_tag }}
+          release_name: Release ${{ steps.prev_tag.outputs.current_tag }}
+          body_path: ${{ steps.release_notes.outputs.notes_file }}
+          draft: ${{ steps.release_type.outputs.draft }}
+          prerelease: ${{ steps.release_type.outputs.prerelease }}
+
+  build-and-upload:
+    needs: create-release
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_name: app-linux-amd64
+          - os: macos-latest
+            asset_name: app-darwin-amd64
+          - os: windows-latest
+            asset_name: app-windows-amd64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build
+        run: |
+          # Build commands here
+          echo "Building for ${{ matrix.os }}"
+          
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./build/${{ matrix.asset_name }}
+          asset_name: ${{ matrix.asset_name }}
+          asset_content_type: application/octet-stream
+```
+
+Additional considerations for the implementation:
+
+1. **Release Notes Generation Script** (optional standalone script):
+```bash
+#!/bin/bash
+# scripts/generate-release-notes.sh
+
+CURRENT_TAG=$1
+PREVIOUS_TAG=$2
+OUTPUT_FORMAT=${3:-markdown}
+
+generate_conventional_changelog() {
+    local from=$1
+    local to=$2
+    
+    # Define commit type mappings
+    declare -A type_headers=(
+        ["feat"]="🚀 Features"
+        ["fix"]="🐛 Bug Fixes"
+        ["docs"]="📚 Documentation"
+        ["style"]="💎 Styles"
+        ["refactor"]="📦 Code Refactoring"
+        ["perf"]="🚀 Performance Improvements"
+        ["test"]="🚨 Tests"
+        ["build"]="🛠 Build System"
+        ["ci"]="⚙️ Continuous Integration"
+        ["chore"]="♻️ Chores"
+        ["revert"]="🗑 Reverts"
+    )
+    
+    # Extract and group commits
+    for type in "${!type_headers[@]}"; do
+        commits=$(git log --pretty=format:"- %s (%h)" --grep="^${type}:" ${from}..${to})
+        if [ -n "$commits" ]; then
+            echo "### ${type_headers[$type]}"
+            echo "$commits"
+            echo ""
+        fi
+    done
+}
+```
+
+2. **GitHub API Integration for Advanced Features**:
+```yaml
+- name: Update release with additional metadata
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: |
+    # Add custom fields to release
+    gh api -X PATCH repos/${{ github.repository }}/releases/${{ steps.create_release.outputs.id }} \
+      --field discussion_category_name="Releases" \
+      --field generate_release_notes=false
+```
+
+3. **Error Handling and Retry Logic**:
+```yaml
+- name: Create release with retry
+  uses: nick-invision/retry@v2
+  with:
+    timeout_minutes: 5
+    max_attempts: 3
+    retry_on: error
+    command: |
+      gh release create ${{ steps.prev_tag.outputs.current_tag }} \
+        --title "Release ${{ steps.prev_tag.outputs.current_tag }}" \
+        --notes-file release_notes.md \
+        ${{ steps.release_type.outputs.draft == 'true' && '--draft' || '' }} \
+        ${{ steps.release_type.outputs.prerelease == 'true' && '--prerelease' || '' }}
+```
+
+# Test Strategy:
+Comprehensive testing strategy for the GitHub Actions release workflow:
+
+1. **Tag Detection and Parsing Tests**:
+   - Test with various tag formats: `v1.0.0`, `v2.1.0-beta.1`, `v3.0.0-rc.1`, `v1.0.0-draft`
+   - Verify correct detection of current and previous tags
+   - Test edge cases: first release (no previous tag), non-sequential tags
+   - Validate tag pattern matching for triggering workflow
+
+2. **Release Notes Generation Tests**:
+   - Create test repository with conventional commits between tags
+   - Verify correct grouping of commits by type (feat, fix, docs, etc.)
+   - Test with empty commit ranges and single commit releases
+   - Validate markdown formatting and special character escaping
+   - Test commit message parsing with various formats
+
+3. **Release Management Tests**:
+   - Test detection of existing releases for a tag
+   - Verify successful deletion of existing releases before recreation
+   - Test API error handling when release doesn't exist
+   - Validate release creation with correct metadata
+
+4. **Draft/Pre-release Logic Tests**:
+   - Test tags with pre-release identifiers: `-alpha`, `-beta`, `-rc`, `-pre`
+   - Verify draft detection for tags ending with `-draft`
+   - Test standard release tags create non-draft, non-prerelease
+   - Validate boolean flag propagation to release creation
+
+5. **Integration Tests**:
+   - Create test workflow that triggers on push to test tags
+   - Verify complete workflow execution from tag push to release creation
+   - Test with multiple platform builds uploading to same release
+   - Validate asset upload URLs are correctly passed between jobs
+
+6. **Error Handling Tests**:
+   - Test behavior when GitHub API rate limits are hit
+   - Verify graceful handling of network failures
+   - Test with invalid GitHub tokens
+   - Validate workflow behavior when previous steps fail
+
+7. **Manual Testing Checklist**:
+   - Push a new version tag and verify release is created
+   - Push same tag again and verify old release is replaced
+   - Test with pre-release tag (e.g., `v1.0.0-beta.1`)
+   - Test with draft tag (e.g., `v1.0.0-draft`)
+   - Verify release notes contain commits since last tag
+   - Check that release assets are properly uploaded
+   - Validate release appears correctly in GitHub UI
+
+# Subtasks:
+## 1. Update Release Workflow to Handle Existing Releases [done]
+### Dependencies: None
+### Description: Modify the GitHub Actions workflow to check for existing releases and delete them if necessary before creating a new release.
+### Details:
+Implement a step in the workflow to check if a release already exists for the current tag and delete it if it does.
+
+## 2. Implement Release Notes Generation [done]
+### Dependencies: 17.1
+### Description: Enhance the workflow to automatically generate release notes from commit history between tags.
+### Details:
+Use git log to extract commit messages and categorize them into features, fixes, and other changes for release notes.
+
+## 3. Add Draft and Pre-release State Management [done]
+### Dependencies: 17.2
+### Description: Implement logic to determine if a release should be a draft or pre-release based on the tag name.
+### Details:
+Use regex to check the tag name for indicators of draft or pre-release status and set the release state accordingly.
+
+## 4. Integrate GitHub API for Metadata Updates [done]
+### Dependencies: 17.3
+### Description: Use the GitHub API to add additional metadata to releases, such as discussion categories.
+### Details:
+Implement a step in the workflow to update the release with additional metadata using the GitHub API.
+
+## 5. Implement Error Handling and Retry Logic [done]
+### Dependencies: 17.4
+### Description: Add error handling and retry logic to the release creation process to ensure robustness.
+### Details:
+Use a retry mechanism to handle transient errors during release creation, with configurable timeout and retry attempts.
+

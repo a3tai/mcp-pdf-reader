@@ -310,102 +310,102 @@ jobs:
           # Verify the binary was created
           ls -la "${BINARY_NAME}"
 
-      - name: Sign macOS binary
-        if: matrix.goos == 'darwin'
-        env:
-          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
-          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
-        run: |
-          if [ -n "$APPLE_CERT_BASE64" ] && [ -n "$APPLE_CERT_PASSWORD" ]; then
-            echo "Setting up code signing..."
-            echo "$APPLE_CERT_BASE64" | base64 --decode > certificate.p12
+      # - name: Sign macOS binary
+      #   if: matrix.goos == 'darwin'
+      #   env:
+      #     APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+      #     APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      #     APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+      #   run: |
+      #     if [ -n "$APPLE_CERT_BASE64" ] && [ -n "$APPLE_CERT_PASSWORD" ]; then
+      #       echo "Setting up code signing..."
+      #       echo "$APPLE_CERT_BASE64" | base64 --decode > certificate.p12
 
-            # Create temporary keychain
-            security create-keychain -p actions temp.keychain
-            security default-keychain -s temp.keychain
-            security unlock-keychain -p actions temp.keychain
+      #       # Create temporary keychain
+      #       security create-keychain -p actions temp.keychain
+      #       security default-keychain -s temp.keychain
+      #       security unlock-keychain -p actions temp.keychain
 
-            # Import certificate
-            security import certificate.p12 -k temp.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
-            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions temp.keychain
+      #       # Import certificate
+      #       security import certificate.p12 -k temp.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+      #       security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions temp.keychain
 
-            # Sign the binary
-            BINARY_NAME="mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
-            codesign --deep --force --verify --verbose \
-              --sign "$APPLE_DEVELOPER_ID" \
-              --options runtime \
-              "$BINARY_NAME"
+      #       # Sign the binary
+      #       BINARY_NAME="mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
+      #       codesign --deep --force --verify --verbose \
+      #         --sign "$APPLE_DEVELOPER_ID" \
+      #         --options runtime \
+      #         "$BINARY_NAME"
 
-            # Verify signature
-            codesign --verify --verbose "$BINARY_NAME"
+      #       # Verify signature
+      #       codesign --verify --verbose "$BINARY_NAME"
 
-            # Clean up
-            rm certificate.p12
-            security delete-keychain temp.keychain
+      #       # Clean up
+      #       rm certificate.p12
+      #       security delete-keychain temp.keychain
 
-            echo "macOS binary signed successfully"
-          else
-            echo "Code signing certificates not available, skipping signing"
-          fi
+      #       echo "macOS binary signed successfully"
+      #     else
+      #       echo "Code signing certificates not available, skipping signing"
+      #     fi
 
-      - name: Sign Windows binary
-        if: matrix.goos == 'windows'
-        env:
-          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
-          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-        run: |
-          if ($env:WINDOWS_CERT_BASE64 -and $env:WINDOWS_CERT_PASSWORD) {
-            Write-Host "Setting up Windows code signing..."
+      # - name: Sign Windows binary
+      #   if: matrix.goos == 'windows'
+      #   env:
+      #     WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+      #     WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+      #   run: |
+      #     if ($env:WINDOWS_CERT_BASE64 -and $env:WINDOWS_CERT_PASSWORD) {
+      #       Write-Host "Setting up Windows code signing..."
 
-            # Decode certificate
-            $cert = [System.Convert]::FromBase64String($env:WINDOWS_CERT_BASE64)
-            [System.IO.File]::WriteAllBytes("certificate.pfx", $cert)
+      #       # Decode certificate
+      #       $cert = [System.Convert]::FromBase64String($env:WINDOWS_CERT_BASE64)
+      #       [System.IO.File]::WriteAllBytes("certificate.pfx", $cert)
 
-            # Sign the binary
-            $binaryName = "mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
-            & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe" sign `
-              /f certificate.pfx `
-              /p $env:WINDOWS_CERT_PASSWORD `
-              /t http://timestamp.digicert.com `
-              /fd SHA256 `
-              /v $binaryName
+      #       # Sign the binary
+      #       $binaryName = "mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
+      #       & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe" sign `
+      #         /f certificate.pfx `
+      #         /p $env:WINDOWS_CERT_PASSWORD `
+      #         /t http://timestamp.digicert.com `
+      #         /fd SHA256 `
+      #         /v $binaryName
 
-            # Verify signature
-            & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe" verify /pa $binaryName
+      #       # Verify signature
+      #       & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe" verify /pa $binaryName
 
-            # Clean up
-            Remove-Item certificate.pfx
+      #       # Clean up
+      #       Remove-Item certificate.pfx
 
-            Write-Host "Windows binary signed successfully"
-          } else {
-            Write-Host "Code signing certificates not available, skipping signing"
-          }
+      #       Write-Host "Windows binary signed successfully"
+      #     } else {
+      #       Write-Host "Code signing certificates not available, skipping signing"
+      #     }
 
-      - name: Sign Linux binary with GPG
-        if: matrix.goos == 'linux'
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: |
-          if [ -n "$GPG_PRIVATE_KEY" ] && [ -n "$GPG_PASSPHRASE" ]; then
-            echo "Setting up GPG signing..."
+      # - name: Sign Linux binary with GPG
+      #   if: matrix.goos == 'linux'
+      #   env:
+      #     GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      #     GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      #   run: |
+      #     if [ -n "$GPG_PRIVATE_KEY" ] && [ -n "$GPG_PASSPHRASE" ]; then
+      #       echo "Setting up GPG signing..."
 
-            # Import GPG key
-            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+      #       # Import GPG key
+      #       echo "$GPG_PRIVATE_KEY" | gpg --batch --import
 
-            # Sign the binary
-            BINARY_NAME="mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
-            echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback \
-              --detach-sign --armor "$BINARY_NAME"
+      #       # Sign the binary
+      #       BINARY_NAME="mcp-pdf-reader-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
+      #       echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback \
+      #         --detach-sign --armor "$BINARY_NAME"
 
-            # Verify signature exists
-            ls -la "${BINARY_NAME}.asc"
+      #       # Verify signature exists
+      #       ls -la "${BINARY_NAME}.asc"
 
-            echo "Linux binary signed successfully"
-          else
-            echo "GPG signing key not available, skipping signing"
-          fi
+      #       echo "Linux binary signed successfully"
+      #     else
+      #       echo "GPG signing key not available, skipping signing"
+      #     fi
 
       - name: Create checksums
         run: |

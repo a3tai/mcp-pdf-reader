@@ -1,0 +1,314 @@
+# Task ID: 16
+# Title: Implement Code Signing for Release Binaries
+# Status: done
+# Dependencies: None
+# Priority: high
+# Description: Set up automated code signing infrastructure for all platform binaries (macOS, Windows, Linux) with certificate management and GitHub Actions integration to ensure release artifacts are properly signed and trusted.
+# Details:
+Implement comprehensive code signing solution for multi-platform releases:
+
+```yaml
+# .github/workflows/release.yml
+name: Release with Code Signing
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  sign-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Import Apple Developer Certificate
+        env:
+          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          echo "$APPLE_CERT_BASE64" | base64 --decode > certificate.p12
+          security create-keychain -p actions temp.keychain
+          security import certificate.p12 -k temp.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions temp.keychain
+      
+      - name: Sign macOS Binary
+        run: |
+          codesign --deep --force --verify --verbose \
+            --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
+            --options runtime \
+            --entitlements entitlements.plist \
+            ./dist/pdfextract-darwin-amd64
+          
+      - name: Notarize macOS Binary
+        run: |
+          xcrun altool --notarize-app \
+            --primary-bundle-id "com.pdfextract.cli" \
+            --username "${{ secrets.APPLE_ID }}" \
+            --password "${{ secrets.APPLE_APP_PASSWORD }}" \
+            --file ./dist/pdfextract-darwin-amd64.zip
+
+  sign-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Setup Windows Code Signing
+        env:
+          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $cert = [System.Convert]::FromBase64String($env:WINDOWS_CERT_BASE64)
+          [System.IO.File]::WriteAllBytes("certificate.pfx", $cert)
+          
+      - name: Sign Windows Binary
+        run: |
+          & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe" sign `
+            /f certificate.pfx `
+            /p $env:WINDOWS_CERT_PASSWORD `
+            /t http://timestamp.digicert.com `
+            /fd SHA256 `
+            /v .\dist\pdfextract-windows-amd64.exe
+
+  sign-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup GPG Signing
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback \
+            --detach-sign --armor ./dist/pdfextract-linux-amd64
+```
+
+Create certificate management scripts:
+
+```bash
+# scripts/cert-management/generate-certs.sh
+#!/bin/bash
+
+# Generate self-signed certificate for development
+generate_dev_cert() {
+    openssl req -x509 -newkey rsa:4096 -keyout dev-key.pem -out dev-cert.pem \
+        -days 365 -nodes -subj "/CN=PDFExtract Development"
+}
+
+# Convert Apple certificate for GitHub Actions
+prepare_apple_cert() {
+    local p12_file="$1"
+    base64 < "$p12_file" > apple-cert-base64.txt
+    echo "Add contents of apple-cert-base64.txt to APPLE_CERT_BASE64 secret"
+}
+
+# Convert Windows certificate
+prepare_windows_cert() {
+    local pfx_file="$1"
+    base64 -w 0 < "$pfx_file" > windows-cert-base64.txt
+    echo "Add contents of windows-cert-base64.txt to WINDOWS_CERT_BASE64 secret"
+}
+```
+
+Implement signing verification:
+
+```go
+// internal/signing/verify.go
+package signing
+
+import (
+    "crypto/x509"
+    "encoding/pem"
+    "fmt"
+    "os/exec"
+    "runtime"
+)
+
+type SignatureVerifier struct {
+    trustedCerts []*x509.Certificate
+}
+
+func (sv *SignatureVerifier) VerifyBinary(path string) error {
+    switch runtime.GOOS {
+    case "darwin":
+        return sv.verifyMacOS(path)
+    case "windows":
+        return sv.verifyWindows(path)
+    case "linux":
+        return sv.verifyLinux(path)
+    default:
+        return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+    }
+}
+
+func (sv *SignatureVerifier) verifyMacOS(path string) error {
+    cmd := exec.Command("codesign", "--verify", "--deep", "--strict", path)
+    output, err := cmd.CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("codesign verification failed: %s", output)
+    }
+    
+    // Check notarization status
+    cmd = exec.Command("spctl", "-a", "-v", path)
+    output, err = cmd.CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("notarization check failed: %s", output)
+    }
+    return nil
+}
+
+func (sv *SignatureVerifier) verifyWindows(path string) error {
+    cmd := exec.Command("signtool", "verify", "/pa", "/v", path)
+    output, err := cmd.CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("signtool verification failed: %s", output)
+    }
+    return nil
+}
+
+func (sv *SignatureVerifier) verifyLinux(path string) error {
+    // Verify GPG signature
+    sigPath := path + ".asc"
+    cmd := exec.Command("gpg", "--verify", sigPath, path)
+    output, err := cmd.CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("GPG verification failed: %s", output)
+    }
+    return nil
+}
+```
+
+Create entitlements for macOS:
+
+```xml
+<!-- entitlements.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
+```
+
+Documentation for certificate setup:
+
+```markdown
+# Code Signing Setup Guide
+
+## Prerequisites
+1. Apple Developer Account (for macOS)
+2. Windows Code Signing Certificate
+3. GPG Key (for Linux)
+
+## GitHub Actions Secrets Required
+
+### macOS
+- `APPLE_CERT_BASE64`: Base64 encoded .p12 certificate
+- `APPLE_CERT_PASSWORD`: Certificate password
+- `APPLE_DEVELOPER_ID`: Developer ID Application certificate name
+- `APPLE_ID`: Apple ID for notarization
+- `APPLE_APP_PASSWORD`: App-specific password
+
+### Windows
+- `WINDOWS_CERT_BASE64`: Base64 encoded .pfx certificate
+- `WINDOWS_CERT_PASSWORD`: Certificate password
+
+### Linux
+- `GPG_PRIVATE_KEY`: ASCII armored GPG private key
+- `GPG_PASSPHRASE`: GPG key passphrase
+
+## Certificate Generation Commands
+
+### macOS Development Certificate
+```bash
+security create-keychain -p password build.keychain
+security default-keychain -s build.keychain
+security unlock-keychain -p password build.keychain
+```
+
+### Windows Self-Signed Certificate (Development)
+```powershell
+New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=PDFExtract Dev" -KeyExportPolicy Exportable -CertStoreLocation Cert:\CurrentUser\My
+```
+
+### Linux GPG Key
+```bash
+gpg --full-generate-key
+gpg --armor --export-secret-keys YOUR_KEY_ID > private.asc
+```
+```
+
+# Test Strategy:
+Comprehensive testing strategy for code signing implementation:
+
+1. **Certificate Management Tests**:
+   - Test certificate import/export scripts with dummy certificates
+   - Verify base64 encoding/decoding for all certificate types
+   - Test keychain creation and certificate import on macOS CI
+   - Verify certificate installation on Windows CI
+   - Test GPG key import on Linux CI
+
+2. **Signing Process Tests**:
+   - Create test binaries for each platform
+   - Test signing workflow locally with development certificates
+   - Verify signed binaries can be executed without security warnings
+   - Test notarization workflow on macOS (may require real Apple Developer account)
+   - Verify Windows Authenticode signatures with signtool verify
+   - Test GPG signature creation and verification on Linux
+
+3. **GitHub Actions Integration Tests**:
+   - Create test workflow that runs on push to test branch
+   - Verify secrets are properly accessed and decoded
+   - Test signing steps with self-signed certificates in CI
+   - Verify artifact upload includes signed binaries
+   - Test failure scenarios (missing secrets, invalid certificates)
+
+4. **Verification Tests**:
+   - Implement automated verification for each platform
+   - Test SignatureVerifier.VerifyBinary() with signed and unsigned binaries
+   - Verify error handling for tampered binaries
+   - Test cross-platform verification (e.g., verify Windows binary on Linux)
+
+5. **End-to-End Release Tests**:
+   - Create test release tag to trigger full workflow
+   - Download and test signed binaries on each platform
+   - Verify macOS Gatekeeper acceptance
+   - Test Windows SmartScreen behavior
+   - Verify GPG signature with public key
+
+6. **Security Tests**:
+   - Ensure certificates are not exposed in logs
+   - Verify temporary files are cleaned up
+   - Test certificate rotation procedures
+   - Verify signing timestamps for long-term validity
+
+# Subtasks:
+## 1. Set Up Certificate Management Scripts [done]
+### Dependencies: None
+### Description: Create scripts to manage and convert certificates for macOS, Windows, and Linux platforms.
+### Details:
+Implement scripts to generate development certificates and convert them to base64 for GitHub Actions.
+
+## 2. Configure GitHub Actions for Code Signing [done]
+### Dependencies: 16.1
+### Description: Set up GitHub Actions workflows to automate code signing for macOS, Windows, and Linux binaries.
+### Details:
+Implement workflows in .github/workflows/release.yml to handle code signing for each platform.
+
+## 3. Implement Signing Verification [done]
+### Dependencies: 16.2
+### Description: Develop a verification system to ensure that signed binaries are valid and trusted.
+### Details:
+Create a Go module to verify signatures on macOS, Windows, and Linux binaries.
+
+## 4. Create macOS Entitlements [done]
+### Dependencies: 16.2
+### Description: Define entitlements for macOS binaries to ensure proper execution and security compliance.
+### Details:
+Develop an entitlements.plist file with necessary permissions for macOS applications.
+
+## 5. Document Code Signing Setup [done]
+### Dependencies: 16.1, 16.2, 16.3, 16.4
+### Description: Create comprehensive documentation for setting up and managing code signing across platforms.
+### Details:
+Write a guide detailing prerequisites, setup steps, and GitHub Actions secrets required for code signing.
+

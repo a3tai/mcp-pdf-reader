@@ -1,0 +1,73 @@
+# Task ID: 10
+# Title: Create Document Intelligence and Analysis Layer
+# Status: pending
+# Dependencies: 8, 9
+# Priority: low
+# Description: Implement document type classification, structure analysis, and comprehensive document intelligence features
+# Details:
+Build document understanding capabilities:
+
+```go
+// internal/intelligence/analyzer.go
+type DocumentAnalyzer struct {
+    extractors map[string]Extractor
+    classifier *DocumentClassifier
+}
+
+func (da *DocumentAnalyzer) Analyze(doc *PDFDocument) (*DocumentAnalysis, error) {
+    // Extract all content types
+    // Detect document structure
+    // Classify document type
+    // Map relationships
+    // Generate insights
+}
+
+// pkg/models/analysis.go
+type DocumentAnalysis struct {
+    Type       string           `json:"type"` // invoice, report, form, etc.
+    Sections   []Section        `json:"sections"`
+    Statistics ContentStats     `json:"statistics"`
+    Quality    QualityMetrics   `json:"quality"`
+    Suggestions []string        `json:"suggestions"`
+}
+
+// Use heuristics and patterns for classification
+// Future: integrate ML models for better accuracy
+```
+
+Implement pdf_analyze_document MCP tool.
+
+# Test Strategy:
+Test with diverse document types: invoices, reports, academic papers. Validate classification accuracy. Test section detection and relationship mapping.
+
+# Subtasks:
+## 1. Implement Document Content Extractors [done]
+### Dependencies: None
+### Description: Create modular extractors for different content types (text, tables, images, forms) that can parse and structure raw PDF content into analyzable formats
+### Details:
+Create an Extractor interface and implement concrete extractors: TextExtractor for paragraphs and headers, TableExtractor for tabular data, ImageExtractor for embedded images, and FormExtractor for form fields. Each extractor should return structured data with position information and confidence scores.
+
+## 2. Build Document Structure Detection System [done]
+### Dependencies: 10.1
+### Description: Implement algorithms to detect document sections, hierarchies, and logical structure including headers, paragraphs, lists, and their relationships
+### Details:
+Create a StructureDetector that analyzes extracted content to identify document sections, build a hierarchical tree of content relationships, detect reading order, and map spatial relationships between elements. Use font sizes, positioning, and styling to infer structure.
+
+## 3. Create Document Classification Engine [done]
+### Dependencies: 10.1, 10.2
+### Description: Develop a rule-based document classifier that can identify document types (invoice, report, form, contract, etc.) based on content patterns and structure
+### Details:
+Implement DocumentClassifier with pattern matching for keywords, structure signatures, and content heuristics. Create classification rules for common document types, implement confidence scoring, and support custom classification rules. Design for future ML model integration.
+
+## 4. Implement Document Analysis and Insights Generation [in-progress]
+### Dependencies: 10.1, 10.2, 10.3
+### Description: Build the core DocumentAnalyzer that orchestrates extractors, structure detection, and classification to produce comprehensive document analysis with statistics and quality metrics
+### Details:
+Implement the DocumentAnalyzer.Analyze method to coordinate all components, calculate content statistics (word count, table count, image count), assess document quality metrics (readability, completeness, formatting consistency), and generate actionable suggestions for document improvement.
+
+## 5. Create pdf_analyze_document MCP Tool [pending]
+### Dependencies: 10.4
+### Description: Implement the Model Context Protocol tool that exposes document analysis capabilities with proper request/response handling and error management
+### Details:
+Create the MCP tool handler that accepts PDF document input, invokes the DocumentAnalyzer, formats the DocumentAnalysis response as JSON, handles errors gracefully, and provides detailed analysis results including type, sections, statistics, quality metrics, and suggestions.
+

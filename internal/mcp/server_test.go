@@ -379,6 +379,74 @@ func TestServer_InvalidArguments(t *testing.T) {
 	}
 }
 
+func TestServer_HandlePDFAnalyzeDocument(t *testing.T) {
+	cfg := &config.Config{
+		Mode:         "stdio",
+		PDFDirectory: "testdata",
+		LogLevel:     "error",
+	}
+
+	pdfService, err := pdf.NewService(100*1024*1024, cfg.PDFDirectory) // 100MB max file size
+	if err != nil {
+		t.Fatalf("Failed to create PDF service: %v", err)
+	}
+
+	server, err := NewServer(cfg, pdfService)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+
+	// Test missing path argument
+	request := mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Arguments: map[string]interface{}{},
+		},
+	}
+
+	result, err := server.handlePDFAnalyzeDocument(context.Background(), request)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if result == nil || !result.IsError {
+		t.Errorf("Expected error result for missing path, got success")
+	}
+
+	// Test valid path argument (will fail due to file not existing)
+	request = mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Arguments: map[string]interface{}{
+				"path": "nonexistent.pdf",
+			},
+		},
+	}
+
+	result, err = server.handlePDFAnalyzeDocument(context.Background(), request)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if result == nil || !result.IsError {
+		t.Errorf("Expected error result for nonexistent file, got success")
+	}
+
+	// Test with config parameter
+	request = mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Arguments: map[string]interface{}{
+				"path":   "test.pdf",
+				"config": `{"detailed_analysis": true}`,
+			},
+		},
+	}
+
+	result, err = server.handlePDFAnalyzeDocument(context.Background(), request)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if result == nil || !result.IsError {
+		t.Errorf("Expected error result for nonexistent file with config, got success")
+	}
+}
+
 func TestFormatMethods(t *testing.T) {
 	// Setup server
 	cfg := &config.Config{

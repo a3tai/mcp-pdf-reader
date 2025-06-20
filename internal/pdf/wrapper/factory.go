@@ -84,7 +84,17 @@ func (f *PDFLibraryFactory) CreateForFile(filePath string) (PDFLibrary, error) {
 	// Analyze file to determine best library
 	libType, err := f.analyzeFile(filePath)
 	if err != nil {
-		// Fall back to default library if analysis fails
+		// Check if this is a fatal error that should be propagated
+		if wrapperErr, ok := err.(*WrapperError); ok {
+			errorMsg := wrapperErr.Err.Error()
+			// Fatal errors: file doesn't exist or is not a PDF
+			if strings.Contains(errorMsg, "cannot access file") ||
+				strings.Contains(errorMsg, "file does not have .pdf extension") {
+				return nil, err
+			}
+		}
+
+		// Fall back to default library for non-fatal analysis failures
 		if f.config.DebugMode {
 			fmt.Printf("File analysis failed, using default library: %v\n", err)
 		}

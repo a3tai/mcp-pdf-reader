@@ -1,0 +1,241 @@
+# Task ID: 15
+# Title: Design and Implement Custom PDF Parser from Scratch
+# Status: pending
+# Dependencies: 2, 12, 13, 14
+# Priority: low
+# Description: Build a complete PDF parser from scratch following PDF 1.4/1.7 specifications, providing full control over form extraction and document parsing without relying on external libraries
+# Details:
+Implement a comprehensive PDF parser with complete control over parsing logic:
+
+```go
+// internal/pdf/custom/parser.go
+package custom
+
+type CustomPDFParser struct {
+    reader      io.ReadSeeker
+    version     string
+    xrefTable   *CrossReferenceTable
+    trailer     Dictionary
+    catalog     *Catalog
+    pageTree    *PageTree
+    objectCache map[ObjectID]PDFObject
+}
+
+// Core parsing methods
+func (p *CustomPDFParser) Parse() error {
+    // 1. Parse PDF header
+    if err := p.parseHeader(); err != nil {
+        return fmt.Errorf("header parse failed: %w", err)
+    }
+    
+    // 2. Locate and parse xref table
+    if err := p.parseXRefTable(); err != nil {
+        return fmt.Errorf("xref parse failed: %w", err)
+    }
+    
+    // 3. Parse trailer dictionary
+    if err := p.parseTrailer(); err != nil {
+        return fmt.Errorf("trailer parse failed: %w", err)
+    }
+    
+    // 4. Load document catalog
+    if err := p.loadCatalog(); err != nil {
+        return fmt.Errorf("catalog load failed: %w", err)
+    }
+    
+    return nil
+}
+
+// internal/pdf/custom/lexer.go
+type PDFLexer struct {
+    reader   *bufio.Reader
+    position int64
+    buffer   []byte
+}
+
+func (l *PDFLexer) NextToken() (Token, error) {
+    // Skip whitespace
+    // Identify token type: number, string, name, array, dict, etc.
+    // Return parsed token
+}
+
+// internal/pdf/custom/objects.go
+type PDFObject interface {
+    Type() ObjectType
+    String() string
+}
+
+type Dictionary map[Name]PDFObject
+type Array []PDFObject
+type Stream struct {
+    Dict Dictionary
+    Data []byte
+}
+
+// internal/pdf/custom/acroform.go
+type AcroFormParser struct {
+    parser     *CustomPDFParser
+    formDict   Dictionary
+    fieldCache map[string]*FormField
+}
+
+func (a *AcroFormParser) ParseAcroForm(catalog Dictionary) (*AcroForm, error) {
+    // Extract AcroForm dictionary
+    acroFormObj := catalog.Get("AcroForm")
+    if acroFormObj == nil {
+        return nil, nil // No forms
+    }
+    
+    // Parse form dictionary
+    formDict, err := a.parser.resolveIndirectObject(acroFormObj)
+    if err != nil {
+        return err
+    }
+    
+    // Parse field tree
+    fields, err := a.parseFieldTree(formDict.Get("Fields"))
+    if err != nil {
+        return err
+    }
+    
+    return &AcroForm{
+        Fields:          fields,
+        NeedAppearances: formDict.GetBool("NeedAppearances"),
+        SigFlags:        formDict.GetInt("SigFlags"),
+        CO:              a.parseCO(formDict.Get("CO")),
+        DR:              a.parseResources(formDict.Get("DR")),
+        DA:              formDict.GetString("DA"),
+        Q:               formDict.GetInt("Q"),
+    }, nil
+}
+
+func (a *AcroFormParser) parseFieldTree(fieldsObj PDFObject) ([]*FormField, error) {
+    // Handle field inheritance
+    // Parse field dictionaries recursively
+    // Resolve widget annotations
+    // Extract field values and properties
+}
+
+// internal/pdf/custom/content_stream.go
+type ContentStreamParser struct {
+    lexer    *PDFLexer
+    graphics *GraphicsState
+    resources Dictionary
+}
+
+func (c *ContentStreamParser) Parse(stream []byte) ([]ContentObject, error) {
+    // Parse PDF content stream operators
+    // Handle text, graphics, and image operators
+    // Track graphics state changes
+    // Extract positioned content
+}
+
+// internal/pdf/custom/filters.go
+type FilterDecoder interface {
+    Decode(data []byte, params Dictionary) ([]byte, error)
+}
+
+var filterDecoders = map[string]FilterDecoder{
+    "FlateDecode":    &FlateDecoder{},
+    "ASCIIHexDecode": &ASCIIHexDecoder{},
+    "ASCII85Decode":  &ASCII85Decoder{},
+    "LZWDecode":      &LZWDecoder{},
+    "RunLengthDecode": &RunLengthDecoder{},
+}
+
+// internal/pdf/custom/encryption.go
+type EncryptionHandler struct {
+    algorithm string
+    keyLength int
+    permissions uint32
+}
+
+func (e *EncryptionHandler) DecryptObject(obj PDFObject, objID ObjectID) (PDFObject, error) {
+    // Handle standard security handler
+    // Support RC4 and AES encryption
+    // Decrypt strings and streams
+}
+
+// Integration with wrapper interface
+type CustomPDFBackend struct {
+    parser *CustomPDFParser
+}
+
+func (c *CustomPDFBackend) Open(reader io.Reader) (PDFDocument, error) {
+    seeker, ok := reader.(io.ReadSeeker)
+    if !ok {
+        // Buffer the reader if not seekable
+        data, err := io.ReadAll(reader)
+        if err != nil {
+            return nil, err
+        }
+        seeker = bytes.NewReader(data)
+    }
+    
+    parser := &CustomPDFParser{
+        reader:      seeker,
+        objectCache: make(map[ObjectID]PDFObject),
+    }
+    
+    if err := parser.Parse(); err != nil {
+        return nil, err
+    }
+    
+    return &customDocument{parser: parser}, nil
+}
+
+func (c *CustomPDFBackend) ExtractFormFields() ([]FormField, error) {
+    acroParser := &AcroFormParser{
+        parser:     c.parser,
+        fieldCache: make(map[string]*FormField),
+    }
+    
+    acroForm, err := acroParser.ParseAcroForm(c.parser.catalog)
+    if err != nil {
+        return nil, err
+    }
+    
+    if acroForm == nil {
+        return []FormField{}, nil
+    }
+    
+    return acroParser.ConvertToFormFields(acroForm.Fields)
+}
+
+# Test Strategy:
+Comprehensive testing strategy for custom PDF parser:
+
+1. **PDF structure parsing tests**:
+   - Test header parsing for various PDF versions (1.0-1.7)
+   - Verify cross-reference table parsing (standard and compressed)
+   - Test trailer dictionary extraction
+   - Validate object parsing for all PDF object types
+
+2. **AcroForm parsing tests**:
+   - Test with PDF reference example forms
+   - Verify field inheritance handling
+   - Test all field types: text, checkbox, radio, combo, list, signature
+   - Validate field value extraction and formatting
+   - Test with nested field hierarchies
+
+3. **Content stream parsing tests**:
+   - Test all text operators (BT, ET, Tf, Tm, Tj, TJ, etc.)
+   - Verify graphics state tracking
+   - Test coordinate transformations
+   - Validate font and encoding handling
+
+4. **Filter and encryption tests**:
+   - Test all standard filters (Flate, ASCII85, etc.)
+   - Verify encryption/decryption with test PDFs
+   - Test password-protected documents
+
+5. **Integration tests**:
+   - Compare output with pdfcpu for same documents
+   - Verify form field extraction matches expected values
+   - Test with real-world PDF forms
+   - Performance benchmarks vs other implementations
+
+6. **Error handling tests**:
+   - Test with malformed PDFs
+   - Verify graceful handling of missing objects
+   - Test recovery from parsing errors
